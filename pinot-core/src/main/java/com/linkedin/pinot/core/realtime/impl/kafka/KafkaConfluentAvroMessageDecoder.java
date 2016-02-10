@@ -19,9 +19,6 @@ package com.linkedin.pinot.core.realtime.impl.kafka;
 import java.util.Map;
 import java.util.Properties;
 
-import com.linkedin.pinot.core.realtime.impl.kafka.AvroRecordToPinotRowGenerator;
-import com.linkedin.pinot.core.realtime.impl.kafka.KafkaAvroMessageDecoder;
-import com.linkedin.pinot.core.realtime.impl.kafka.KafkaMessageDecoder;
 import io.confluent.kafka.serializers.KafkaAvroDecoder;
 import kafka.utils.VerifiableProperties;
 import org.apache.avro.generic.GenericData.Record;
