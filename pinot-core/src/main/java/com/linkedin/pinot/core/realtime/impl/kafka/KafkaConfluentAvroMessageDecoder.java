@@ -51,6 +51,8 @@ public class KafkaConfluentAvroMessageDecoder implements KafkaMessageDecoder {
   @Override
   public GenericRow decode(byte[] payload) {
 
+    System.out.println("Asked to decode data of length " + payload.length);
+
     if (payload == null || payload.length == 0) {
       return null;
     }
