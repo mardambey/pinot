@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -29,6 +30,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -36,8 +38,11 @@ import java.util.Random;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.avro.Schema;
@@ -54,6 +59,14 @@ import org.apache.avro.util.Utf8;
 import org.apache.commons.compress.archivers.ArchiveException;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.helix.ExternalViewChangeListener;
+import org.apache.helix.HelixManager;
+import org.apache.helix.HelixManagerFactory;
+import org.apache.helix.InstanceType;
+import org.apache.helix.NotificationContext;
+import org.apache.helix.model.ExternalView;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -63,6 +76,11 @@ import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
+import com.google.common.util.concurrent.AsyncFunction;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListenableFutureTask;
+import com.google.common.util.concurrent.Uninterruptibles;
 import com.linkedin.pinot.client.ConnectionFactory;
 import com.linkedin.pinot.common.utils.EqualityUtils;
 import com.linkedin.pinot.common.utils.KafkaStarterUtils;
@@ -90,6 +108,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
   private static final int MAX_MESSAGES_PER_BATCH = 10000;
   private static final int MAX_MULTIVALUE_CARDINALITY = 5;
   protected static final boolean GATHER_FAILED_QUERIES = false;
+  protected static final String PINOT_SCHEMA_FILE = "OnTimeSchema.json";
   private int failedQueryCount = 0;
   private int queryCount = 0;
 
@@ -181,7 +200,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
     }
   }
 
-  protected void runQuery(String pqlQuery, List<String> sqlQueries) throws Exception {
+  protected void runQuery(final String pqlQuery, List<String> sqlQueries) throws Exception {
     try {
       // TODO Use Pinot client API for this
       queryCount++;
@@ -208,26 +227,34 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
           ResultSet rs = statement.getResultSet();
           LOGGER.debug("Trying to get result from sql: " + rs);
           // Single value result for the aggregation, compare with the actual value
-          String bqlValue = firstAggregationResult.getString("value");
+          final String bqlValue = firstAggregationResult.getString("value");
 
           rs.first();
-          String sqlValue = rs.getString(1);
-
-          if (bqlValue != null && sqlValue != null) {
-            // Strip decimals
-            bqlValue = bqlValue.replaceAll("\\..*", "");
-            sqlValue = sqlValue.replaceAll("\\..*", "");
-          }
+          final String sqlValue = rs.getString(1);
 
           LOGGER.debug("bql value: " + bqlValue);
           LOGGER.debug("sql value: " + sqlValue);
+          long compareSqlValue = -1;
+          long compareBqlValue = -1;
+
+          if (bqlValue != null && sqlValue != null) {
+            // H2 returns float and double values in scientific notation. Convert them to plain notation first..
+            try {
+              compareSqlValue = new BigDecimal(sqlValue).longValue();
+              compareBqlValue = new BigDecimal(bqlValue).longValue();
+            } catch (NumberFormatException e) {
+              LOGGER.warn("Ignoring number format excection in " + sqlValue);
+              compareBqlValue=-2; // So comparison will fail below
+            }
+          }
+
           if (GATHER_FAILED_QUERIES) {
-            if (!EqualityUtils.isEqual(bqlValue, sqlValue)) {
+            if (!EqualityUtils.isEqual(compareBqlValue, compareSqlValue)) {
               saveFailedQuery(pqlQuery, sqlQueries, "Values did not match for query " + pqlQuery + ", expected "
                   + sqlValue + ", got " + bqlValue);
             }
           } else {
-            Assert.assertEquals(bqlValue, sqlValue, "Values did not match for query " + pqlQuery);
+            Assert.assertEquals(compareBqlValue, compareSqlValue, "Values did not match for query " + pqlQuery + ",SQL:" + sqlValue + ",BQL:" + bqlValue);
           }
         } else if (firstAggregationResult.has("groupByResult")) {
           // Load values from the query result
@@ -250,7 +277,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
 
               // Grouped result, build correct values and iterate through to compare both
               Map<String, String> correctValues = new TreeMap<String, String>(new NullableStringComparator());
-              LOGGER.info("Trying to execute sql query: " + sqlQueries.get(aggregationGroupIndex));
+              LOGGER.debug("Trying to execute sql query:{}", sqlQueries.get(aggregationGroupIndex));
               statement.execute(sqlQueries.get(aggregationGroupIndex));
               ResultSet rs = statement.getResultSet();
               LOGGER.debug("Trying to get result from sql: " + rs);
@@ -307,7 +334,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
                   }
                 }
               } else {
-                LOGGER.warn("SQL query returned more than 10k rows, skipping comparison");
+                LOGGER.warn("SQL: {} returned more than 10k rows, skipping comparison", sqlQueries.get(aggregationGroupIndex));
                 queryCount--;
               }
             } else {
@@ -335,6 +362,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
         }
       } else {
         // Don't compare selection results for now
+        LOGGER.warn("Skipping comparison since there are no aggregation columns");
       }
     } catch (JSONException exception) {
       if (GATHER_FAILED_QUERIES) {
@@ -502,6 +530,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
             messagesToWrite.add(data);
             messagesInThisBatch++;
             if (MAX_MESSAGES_PER_BATCH <= messagesInThisBatch) {
+              LOGGER.info("Sending a batch of {} records to Kafka", messagesInThisBatch);
               messagesInThisBatch = 0;
               producer.send(messagesToWrite);
               messagesToWrite.clear();
@@ -513,13 +542,14 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
         }
 
         if (BATCH_KAFKA_MESSAGES) {
+          LOGGER.info("Sending last match of {} records to Kafka", messagesToWrite.size());
           producer.send(messagesToWrite);
         }
 
         outputStream.close();
         reader.close();
         LOGGER.info("Finished writing " + recordCount + " records from " + avroFile.getName() + " into Kafka topic "
-            + kafkaTopic);
+            + kafkaTopic + " from file " + avroFile.getName());
         int totalRecordCount = totalAvroRecordWrittenCount.addAndGet(recordCount);
         LOGGER.info("Total records written so far " + totalRecordCount);
       } catch (Exception e) {
@@ -570,6 +600,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
               messagesInThisBatch = 0;
               producer.send(messagesToWrite);
               messagesToWrite.clear();
+              Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
             }
           } else {
             producer.send(data);
@@ -587,8 +618,8 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
 
       outputStream.close();
       reader.close();
-      LOGGER.info("Finished writing " + recordCount + " records from " + avroFile.getName() + " into Kafka topic "
-          + kafkaTopic);
+      LOGGER.info(
+          "Finished writing " + recordCount + " records from " + avroFile.getName() + " into Kafka topic " + kafkaTopic);
       int totalRecordCount = totalAvroRecordWrittenCount.addAndGet(recordCount);
       LOGGER.info("Total records written so far " + totalRecordCount);
     } catch (Exception e) {
@@ -662,26 +693,39 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
     }
   }
 
-  public static void buildSegmentsFromAvro(final List<File> avroFiles, Executor executor, int baseSegmentIndex,
-      final File baseDirectory, final File segmentTarDir, final String tableName) {
+  public static Future<Map<File, File>> buildSegmentsFromAvro(final List<File> avroFiles, Executor executor, int baseSegmentIndex,
+      final File baseDirectory, final File segmentTarDir, final String tableName, final boolean createStarTreeIndex) {
     int segmentCount = avroFiles.size();
     LOGGER.info("Building " + segmentCount + " segments in parallel");
+    List<ListenableFutureTask<Pair<File, File>>> futureTasks = new ArrayList<ListenableFutureTask<Pair<File,File>>>();
+
     for (int i = 1; i <= segmentCount; ++i) {
       final int segmentIndex = i - 1;
       final int segmentNumber = i + baseSegmentIndex;
 
-      executor.execute(new Runnable() {
+      final ListenableFutureTask<Pair<File, File>> buildSegmentFutureTask =
+          ListenableFutureTask.<Pair<File, File>>create(new Callable<Pair<File, File>>() {
         @Override
-        public void run() {
+        public Pair<File, File> call() throws Exception {
           try {
             // Build segment
             LOGGER.info("Starting to build segment " + segmentNumber);
             File outputDir = new File(baseDirectory, "segment-" + segmentNumber);
-            final SegmentGeneratorConfig genConfig =
-                SegmentTestUtils.getSegmentGenSpecWithSchemAndProjectedColumns(avroFiles.get(segmentIndex), outputDir,
-                    TimeUnit.DAYS, tableName);
+            final File inputAvroFile = avroFiles.get(segmentIndex);
+            final SegmentGeneratorConfig genConfig = SegmentTestUtils
+                .getSegmentGenSpecWithSchemAndProjectedColumns(inputAvroFile, outputDir, TimeUnit.DAYS, tableName);
+
+            if (createStarTreeIndex) {
+              final File pinotSchemaFile = new File(TestUtils.getFileFromResourceUrl(
+                  BaseClusterIntegrationTest.class.getClassLoader().getResource(PINOT_SCHEMA_FILE)));
+              com.linkedin.pinot.common.data.Schema pinotSchema =
+                  com.linkedin.pinot.common.data.Schema.fromFile(pinotSchemaFile);
+              genConfig.setSchema(pinotSchema);
+            }
 
             genConfig.setSegmentNamePostfix(Integer.toString(segmentNumber));
+            genConfig.setEnableStarTreeIndex(createStarTreeIndex);
+            genConfig.setStarTreeIndexSpec(null);
 
             final SegmentIndexCreationDriver driver = SegmentCreationDriverFactory.get(null);
             driver.init(genConfig);
@@ -689,15 +733,111 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
 
             // Tar segment
             String segmentName = outputDir.list()[0];
-            TarGzCompressionUtils.createTarGzOfDirectory(outputDir.getAbsolutePath() + "/" + segmentName, new File(
-                segmentTarDir, segmentName).getAbsolutePath());
-            LOGGER.info("Completed segment " + segmentNumber + " : " + segmentName);
+            final String tarGzPath = TarGzCompressionUtils.createTarGzOfDirectory(outputDir.getAbsolutePath() + "/" +
+                    segmentName, new File(segmentTarDir, segmentName).getAbsolutePath());
+            LOGGER.info("Completed segment " + segmentNumber + " : " + segmentName +" from file " + inputAvroFile.getName());
+            return new ImmutablePair<File, File>(inputAvroFile, new File(tarGzPath));
           } catch (Exception e) {
-            throw new RuntimeException(e);
+                LOGGER.error("Exception while building segment input: {} output {} ",
+                    avroFiles.get(segmentIndex), "segment-" + segmentNumber);
+                throw new RuntimeException(e);
           }
         }
       });
+
+      futureTasks.add(buildSegmentFutureTask);
+      executor.execute(buildSegmentFutureTask);
     }
+
+    ListenableFuture<List<Pair<File, File>>> pairListFuture = Futures.allAsList(futureTasks);
+    return Futures.transform(pairListFuture, new AsyncFunction<List<Pair<File, File>>, Map<File, File>>() {
+      @Override
+      public ListenableFuture<Map<File, File>> apply(List<Pair<File, File>> input) throws Exception {
+        Map<File, File> avroToSegmentMap = new HashMap<File, File>();
+        for (Pair<File, File> avroToSegmentPair : input) {
+          avroToSegmentMap.put(avroToSegmentPair.getLeft(), avroToSegmentPair.getRight());
+        }
+        return Futures.immediateFuture(avroToSegmentMap);
+      }
+    });
+  }
+
+  protected void waitForRecordCountToStabilizeToExpectedCount(int expectedRecordCount, long deadlineMs) throws Exception {
+    int pinotRecordCount = -1;
+    final long startTimeMs = System.currentTimeMillis();
+
+    do {
+      Thread.sleep(5000L);
+
+      try {
+        // Run the query
+        JSONObject response = postQuery("select count(*) from 'mytable'");
+        JSONArray aggregationResultsArray = response.getJSONArray("aggregationResults");
+        JSONObject firstAggregationResult = aggregationResultsArray.getJSONObject(0);
+        String pinotValue = firstAggregationResult.getString("value");
+        pinotRecordCount = Integer.parseInt(pinotValue);
+
+        LOGGER.info("Pinot record count: " + pinotRecordCount + "\tExpected count: " + expectedRecordCount);
+        TOTAL_DOCS = response.getLong("totalDocs");
+      } catch (Exception e) {
+        LOGGER.warn("Caught exception while waiting for record count to stabilize, will try again.", e);
+      }
+
+      if (expectedRecordCount > pinotRecordCount) {
+        final long now = System.currentTimeMillis();
+        Assert.assertTrue(now < deadlineMs, "Failed to read " + expectedRecordCount + " records within the deadline (deadline="
+            + deadlineMs + "ms,now="  + now + "ms,NumRecordsRead=" + pinotRecordCount + ")");
+      }
+    } while (pinotRecordCount < expectedRecordCount);
+
+    if (expectedRecordCount != pinotRecordCount) {
+      LOGGER.error("Got more records than expected");
+      Assert.fail("Expecting " + expectedRecordCount + " but got " + pinotRecordCount);
+    }
+  }
+
+  protected CountDownLatch setupSegmentCountCountDownLatch(final String tableName, final int expectedSegmentCount)
+      throws Exception {
+    final CountDownLatch latch = new CountDownLatch(1);
+    HelixManager manager =
+        HelixManagerFactory
+            .getZKHelixManager(getHelixClusterName(), "test_instance", InstanceType.SPECTATOR, ZkStarter.DEFAULT_ZK_STR);
+    manager.connect();
+    manager.addExternalViewChangeListener(new ExternalViewChangeListener() {
+      private boolean _hasBeenTriggered = false;
+
+      @Override
+      public void onExternalViewChange(List<ExternalView> externalViewList, NotificationContext changeContext) {
+        // Nothing to do?
+        if (_hasBeenTriggered) {
+          return;
+        }
+
+        for (ExternalView externalView : externalViewList) {
+          if (externalView.getId().contains(tableName)) {
+
+            Set<String> partitionSet = externalView.getPartitionSet();
+            if (partitionSet.size() == expectedSegmentCount) {
+              int onlinePartitionCount = 0;
+
+              for (String partitionId : partitionSet) {
+                Map<String, String> partitionStateMap = externalView.getStateMap(partitionId);
+                if (partitionStateMap.containsValue("ONLINE")) {
+                  onlinePartitionCount++;
+                }
+              }
+
+              if (onlinePartitionCount == expectedSegmentCount) {
+                System.out.println("Got " + expectedSegmentCount + " online tables, unlatching the main thread");
+                latch.countDown();
+                _hasBeenTriggered = true;
+              }
+            }
+          }
+        }
+      }
+    });
+    return latch;
   }
 
   public static void ensureDirectoryExistsAndIsEmpty(File tmpDir)
@@ -731,7 +871,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
     }
   }
 
-  public List<File> unpackAvroData(File tmpDir, int segmentCount)
+  public static List<File> unpackAvroData(File tmpDir, int segmentCount)
       throws IOException, ArchiveException {
     TarGzCompressionUtils.unTar(new File(TestUtils.getFileFromResourceUrl(
             RealtimeClusterIntegrationTest.class.getClassLoader()
@@ -784,7 +924,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
   public void testHardcodedQuerySet() throws Exception {
     for (String query : getHardCodedQuerySet()) {
       try {
-        LOGGER.info("Trying to send query : {}", query);
+        LOGGER.debug("Trying to send query : {}", query);
         runQuery(query, Collections.singletonList(query.replace("'mytable'", "mytable")));
       } catch (Exception e) {
         LOGGER.error("Getting erro for query : {}", query);
@@ -809,7 +949,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
     }
 
     for (QueryGenerator.Query query : queries) {
-      LOGGER.info("Trying to send query : {}", query.generatePql());
+      LOGGER.debug("Trying to send query : {}", query.generatePql());
       runQuery(query.generatePql(), query.generateH2Sql());
     }
   }
@@ -830,7 +970,7 @@ public abstract class BaseClusterIntegrationTest extends ClusterTest {
     }
 
     for (QueryGenerator.Query query : queries) {
-      LOGGER.info("Trying to send query : {}", query.generatePql());
+      LOGGER.debug("Trying to send query : {}", query.generatePql());
       runQuery(query.generatePql(), query.generateH2Sql());
     }
   }

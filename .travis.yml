@@ -1,0 +1,29 @@
+language: java
+
+env:
+  - PINOT_MODULE="pinot-integration-tests"
+  - PINOT_MODULE="pinot-core"
+  - PINOT_MODULE="pinot-controller"
+  - PINOT_MODULE="pinot-api"
+  - PINOT_MODULE="pinot-common"
+  - PINOT_MODULE="pinot-transport"
+  - PINOT_MODULE="pinot-broker"
+  - PINOT_MODULE="pinot-server"
+  - PINOT_MODULE="pinot-perf"
+
+jdk:
+  - openjdk7
+  - oraclejdk7
+  - oraclejdk8
+
+install:
+  - mvn clean install -DskipTests -Dassembly.skipAssembly=true > /dev/null
+
+script:
+  - cd $PINOT_MODULE
+  - cp ../.travis_cmd.sh .
+  - bash .travis_cmd.sh
+
+branches:
+  only:
+    - master

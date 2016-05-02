@@ -15,13 +15,13 @@
  */
 package com.linkedin.pinot.core.plan.maker;
 
-import java.util.List;
-import java.util.concurrent.ExecutorService;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.core.data.manager.offline.SegmentDataManager;
 import com.linkedin.pinot.core.indexsegment.IndexSegment;
 import com.linkedin.pinot.core.plan.AggregationGroupByImplementationType;
 import com.linkedin.pinot.core.plan.AggregationGroupByOperatorPlanNode;
+import com.linkedin.pinot.core.plan.AggregationGroupByPlanNode;
+import com.linkedin.pinot.core.plan.AggregationOperatorPlanNode;
 import com.linkedin.pinot.core.plan.AggregationPlanNode;
 import com.linkedin.pinot.core.plan.CombinePlanNode;
 import com.linkedin.pinot.core.plan.GlobalPlanImplV0;
@@ -30,7 +30,12 @@ import com.linkedin.pinot.core.plan.Plan;
 import com.linkedin.pinot.core.plan.PlanNode;
 import com.linkedin.pinot.core.plan.SelectionPlanNode;
 import com.linkedin.pinot.core.query.aggregation.groupby.BitHacks;
+import com.linkedin.pinot.core.query.config.QueryExecutorConfig;
 import com.linkedin.pinot.core.segment.index.IndexSegmentImpl;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -40,6 +45,27 @@ import com.linkedin.pinot.core.segment.index.IndexSegmentImpl;
  *
  */
 public class InstancePlanMakerImplV2 implements PlanMaker {
+  private static final Logger LOGGER = LoggerFactory.getLogger(InstancePlanMakerImplV2.class);
+  private static final String NEW_AGGREGATION_GROUPBY_STRING = "new.aggregation.groupby";
+  private boolean _enableNewAggreagationGroupBy = false;
+
+  /**
+   * Default constructor.
+   */
+  public InstancePlanMakerImplV2() {
+  }
+
+  /**
+   * Constructor for usage when client requires to pass queryExecutorConfig to this class.
+   * Sets flag to indicate whether to enable new implementation of AggregationGroupBy operator,
+   * based on the queryExecutorConfig.
+   *
+   * @param queryExecutorConfig
+   */
+  public InstancePlanMakerImplV2(QueryExecutorConfig queryExecutorConfig) {
+    _enableNewAggreagationGroupBy = queryExecutorConfig.getConfig().getBoolean(NEW_AGGREGATION_GROUPBY_STRING, false);
+    LOGGER.info("New AggregationGroupBy operator: {}", (_enableNewAggreagationGroupBy) ? "Enabled" : "Disabled");
+  }
 
   @Override
   public PlanNode makeInnerSegmentPlan(IndexSegment indexSegment, BrokerRequest brokerRequest) {
@@ -47,18 +73,30 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
     if (brokerRequest.isSetAggregationsInfo()) {
       if (!brokerRequest.isSetGroupBy()) {
         // Only Aggregation
-        final PlanNode aggregationPlanNode = new AggregationPlanNode(indexSegment, brokerRequest);
-        return aggregationPlanNode;
+        if (useNewAggregationOperator(brokerRequest)) {
+          return new AggregationPlanNode(indexSegment, brokerRequest);
+        } else {
+          return new AggregationOperatorPlanNode(indexSegment, brokerRequest);
+        }
       } else {
         // Aggregation GroupBy
         PlanNode aggregationGroupByPlanNode;
         if (indexSegment instanceof IndexSegmentImpl) {
-          if (isGroupKeyFitForLong(indexSegment, brokerRequest)) {
-            aggregationGroupByPlanNode =
-                new AggregationGroupByOperatorPlanNode(indexSegment, brokerRequest, AggregationGroupByImplementationType.Dictionary);
+
+          // AggregationGroupByPlanNode is the new implementation of group-by aggregations, and is currently turned OFF.
+          // Once all feature and perf testing is performed, the code will be turned ON, and this 'if' check will
+          // be removed.
+          if (_enableNewAggreagationGroupBy) {
+            aggregationGroupByPlanNode = new AggregationGroupByPlanNode(indexSegment, brokerRequest,
+                AggregationGroupByImplementationType.Dictionary);
           } else {
-            aggregationGroupByPlanNode =
-                new AggregationGroupByOperatorPlanNode(indexSegment, brokerRequest, AggregationGroupByImplementationType.DictionaryAndTrie);
+            if (isGroupKeyFitForLong(indexSegment, brokerRequest)) {
+              aggregationGroupByPlanNode = new AggregationGroupByOperatorPlanNode(indexSegment, brokerRequest,
+                  AggregationGroupByImplementationType.Dictionary);
+            } else {
+              aggregationGroupByPlanNode = new AggregationGroupByOperatorPlanNode(indexSegment, brokerRequest,
+                  AggregationGroupByImplementationType.DictionaryAndTrie);
+            }
           }
         } else {
           aggregationGroupByPlanNode =
@@ -73,6 +111,18 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
       return selectionPlanNode;
     }
     throw new UnsupportedOperationException("The query contains no aggregation or selection!");
+  }
+
+  /**
+   * Temporary method to check if the new implementation of Aggregation can be used.
+   * This method will be removed once the new implementation of AggregationOperator is turned
+   * ON by default.
+   *
+   * @param brokerRequest
+   * @return
+   */
+  private boolean useNewAggregationOperator(BrokerRequest brokerRequest) {
+    return _enableNewAggreagationGroupBy && AggregationPlanNode.isFitForAggregationFastAggregation(brokerRequest);
   }
 
   @Override

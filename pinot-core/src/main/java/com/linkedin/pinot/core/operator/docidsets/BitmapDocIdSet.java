@@ -15,56 +15,96 @@
  */
 package com.linkedin.pinot.core.operator.docidsets;
 
-import java.util.Arrays;
-
-import org.roaringbitmap.buffer.ImmutableRoaringBitmap;
-import org.roaringbitmap.buffer.MutableRoaringBitmap;
-
 import com.linkedin.pinot.core.common.BlockDocIdIterator;
 import com.linkedin.pinot.core.common.BlockMetadata;
 import com.linkedin.pinot.core.operator.dociditerators.BitmapDocIdIterator;
+import java.util.Arrays;
+import org.roaringbitmap.buffer.ImmutableRoaringBitmap;
+import org.roaringbitmap.buffer.MutableRoaringBitmap;
+
 
 public class BitmapDocIdSet implements FilterBlockDocIdSet {
 
   final private ImmutableRoaringBitmap[] bitmaps;
 
-  private BlockMetadata blockMetadata;
   BitmapDocIdIterator bitmapBasedBlockIdIterator;
-
-  private boolean exclusion;
 
   private int startDocId;
 
   private int endDocId;
 
-  private MutableRoaringBitmap answer;
+  private ImmutableRoaringBitmap answer;
 
-  public BitmapDocIdSet(String datasourceName, BlockMetadata blockMetadata,
+  /**
+   * 
+   * @param datasourceName
+   * @param blockMetadata
+   * @param startDocId inclusive
+   * @param endDocId inclusive
+   * @param bitmaps
+   */
+  public BitmapDocIdSet(String datasourceName, BlockMetadata blockMetadata, int startDocId, int endDocId,
       ImmutableRoaringBitmap... bitmaps) {
-    this(datasourceName, blockMetadata, bitmaps, false);
+    this(datasourceName, blockMetadata, startDocId, endDocId, bitmaps, false);
   }
 
-  public BitmapDocIdSet(String datasourceName, BlockMetadata blockMetadata,
+  /**
+   * 
+   * @param datasourceName
+   * @param blockMetadata
+   * @param startDocId inclusive
+   * @param endDocId inclusive
+   * @param bitmaps
+   * @param exclusion
+   */
+  public BitmapDocIdSet(String datasourceName, BlockMetadata blockMetadata, int startDocId, int endDocId,
       ImmutableRoaringBitmap[] bitmaps, boolean exclusion) {
-    this.blockMetadata = blockMetadata;
     this.bitmaps = bitmaps;
-    this.exclusion = exclusion;
-    setStartDocId(blockMetadata.getStartDocId());
-    setEndDocId(blockMetadata.getEndDocId());
-    answer = MutableRoaringBitmap.or(bitmaps);
-    if (exclusion) {
-      answer.flip(startDocId, endDocId + 1); // end is exclusive
+    setStartDocId(startDocId);
+    setEndDocId(endDocId);
+    // or() operation below can be expensive for large segment sizes
+    // We avoid that for simple '=' queries
+    if (bitmaps.length > 1 || exclusion) {
+      MutableRoaringBitmap orBitmap = MutableRoaringBitmap.or(bitmaps);
+      if (exclusion) {
+        orBitmap.flip(startDocId, endDocId + 1); // end is exclusive
+      }
+      answer = orBitmap;
+
+    } else if (bitmaps.length == 1){
+      answer = bitmaps[0];
+    } else {
+      answer = new MutableRoaringBitmap().toMutableRoaringBitmap();
+    }
+
+    //by default bitmap is created for the all documents (raw docs + agg docs of star tree).
+    //we need to consider only bits between start/end docId
+    //startDocId/endDocId is decided by the filter plan node based on starTree vs raw data
+    //TODO:check the performance penalty of removing this at runtime v/s <br/> 
+    //changing the bitmap index creation (i.e create two separate bitmaps for raw docs and materialized docs)
+    //this should be a no-op when we don't have star tree
+    if (blockMetadata.getStartDocId() != startDocId) {
+      int start = Math.min(startDocId, blockMetadata.getStartDocId());
+      int end = Math.max(startDocId, blockMetadata.getStartDocId());
+      // TODO/atumbde: Removed to address [PINOT-2806]
+      //answer.remove(start, end + 1);//end is exclusive
+    }
+    if (blockMetadata.getEndDocId() != endDocId) {
+      int start = Math.min(endDocId, blockMetadata.getEndDocId());
+      int end = Math.max(endDocId, blockMetadata.getEndDocId());
+      // TODO/atumbde: Removed to address [PINOT-2806]
+      //answer.remove(start, end + 1);//end is exclusive
     }
   }
 
   @Override
   public int getMinDocId() {
-    return blockMetadata.getStartDocId();
+    return startDocId;
   }
 
   @Override
   public int getMaxDocId() {
-    return blockMetadata.getEndDocId();
+    return endDocId;
   }
 
   /**
@@ -89,8 +129,8 @@ public class BitmapDocIdSet implements FilterBlockDocIdSet {
   @Override
   public BlockDocIdIterator iterator() {
     bitmapBasedBlockIdIterator = new BitmapDocIdIterator(answer.getIntIterator());
-    bitmapBasedBlockIdIterator.setStartDocId(blockMetadata.getStartDocId());
-    bitmapBasedBlockIdIterator.setEndDocId(blockMetadata.getEndDocId());
+    bitmapBasedBlockIdIterator.setStartDocId(startDocId);
+    bitmapBasedBlockIdIterator.setEndDocId(endDocId);
     return bitmapBasedBlockIdIterator;
   }
 

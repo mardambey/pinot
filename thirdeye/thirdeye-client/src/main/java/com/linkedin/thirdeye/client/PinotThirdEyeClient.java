@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.helix.manager.zk.ZKHelixAdmin;
+import org.apache.helix.model.InstanceConfig;
 import org.apache.http.HttpHost;
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -46,10 +48,8 @@ import com.linkedin.pinot.common.data.FieldSpec.DataType;
 import com.linkedin.pinot.common.data.MetricFieldSpec;
 import com.linkedin.pinot.common.data.Schema;
 import com.linkedin.pinot.common.data.TimeFieldSpec;
-import com.linkedin.thirdeye.api.DimensionKey;
 import com.linkedin.thirdeye.api.DimensionSpec;
 import com.linkedin.thirdeye.api.MetricSpec;
-import com.linkedin.thirdeye.api.MetricTimeSeries;
 import com.linkedin.thirdeye.api.MetricType;
 import com.linkedin.thirdeye.api.SegmentDescriptor;
 import com.linkedin.thirdeye.api.StarTreeConfig;
@@ -57,7 +57,7 @@ import com.linkedin.thirdeye.api.TimeGranularity;
 import com.linkedin.thirdeye.api.TimeSpec;
 import com.linkedin.thirdeye.client.ThirdEyeMetricFunction.Expression;
 import com.linkedin.thirdeye.client.factory.PinotThirdEyeClientFactory;
-import com.linkedin.thirdeye.client.util.PqlUtils;
+import com.linkedin.thirdeye.client.util.PqlGenerator;
 import com.linkedin.thirdeye.query.ThirdEyeRatioFunction;
 
 /**
@@ -70,26 +70,31 @@ import com.linkedin.thirdeye.query.ThirdEyeRatioFunction;
  * (from*).
  * @author jteoh
  */
-public class PinotThirdEyeClient implements ThirdEyeClient {
+public class PinotThirdEyeClient extends BaseThirdEyeClient {
   public static final String CONTROLLER_HOST_PROPERTY_KEY = "controllerHost";
   public static final String CONTROLLER_PORT_PROPERTY_KEY = "controllerPort";
+  public static final String FIXED_COLLECTIONS_PROPERTY_KEY = "fixedCollections";
+  public static final String CLUSTER_NAME_PROPERTY_KEY = "clusterName";
+  public static final String TAG_PROPERTY_KEY = "tag";
+  public static final String BROKERS_PROPERTY_KEY = "brokers";
 
   private static final Logger LOG = LoggerFactory.getLogger(PinotThirdEyeClient.class);
 
   private static final String UTF_8 = "UTF-8";
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final String TABLES_ENDPOINT = "tables/";
+  private static final String BROKER_PREFIX = "Broker_";
 
   // No way to determine data retention from pinot schema
   private static final TimeGranularity DEFAULT_TIME_RETENTION = null;
-  // Pinot TimeFieldSpec always assumes granularity size of 1.
-  private static final int GRANULARITY_SIZE = 1;
 
   private final Connection connection;
   private final LoadingCache<String, ResultSetGroup> resultSetGroupCache;
   private final LoadingCache<String, Schema> schemaCache;
   private final HttpHost controllerHost;
   private final CloseableHttpClient controllerClient;
+  private List<String> fixedCollections = null;
+  private PqlGenerator pqlGenerator = new PqlGenerator();
 
   protected PinotThirdEyeClient(Connection connection, String controllerHostName,
       int controllerPort) {
@@ -102,6 +107,7 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
     this.controllerHost = new HttpHost(controllerHostName, controllerPort);
     // TODO currently no way to configure the CloseableHttpClient
     this.controllerClient = HttpClients.createDefault();
+
     LOG.info("Created PinotThirdEyeClient to {} with controller {}", connection, controllerHost);
   }
 
@@ -122,15 +128,34 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
   }
 
   public static PinotThirdEyeClient fromZookeeper(String controllerHost, int controllerPort,
-      String zkUrl) {
-    return fromZookeeper(new CachedThirdEyeClientConfig(), controllerHost, controllerPort, zkUrl);
+      String zkUrl, String clusterName, String tag) {
+    return fromZookeeper(new CachedThirdEyeClientConfig(), controllerHost, controllerPort, zkUrl,
+        clusterName, tag);
   }
 
+  /**
+   * Creates a new PinotThirdEyeClient using the clusterName and broker tag
+   * @param config
+   * @param controllerHost
+   * @param controllerPort
+   * @param zkUrl
+   * @param clusterName : required property
+   * @param tag : required property
+   * @return
+   */
   public static PinotThirdEyeClient fromZookeeper(CachedThirdEyeClientConfig config,
-      String controllerHost, int controllerPort, String zkUrl) {
-    Connection connection = ConnectionFactory.fromZookeeper(zkUrl);
-    LOG.info("Created PinotThirdEyeClient to zookeeper: {}", zkUrl);
-    return new PinotThirdEyeClient(connection, controllerHost, controllerPort);
+      String controllerHost, int controllerPort, String zkUrl, String clusterName, String tag) {
+    LOG.info("Creating PinotThirdEyeClient from zk,cluster,tag: {},{},{}", zkUrl, clusterName, tag);
+    ZKHelixAdmin helixAdmin = new ZKHelixAdmin(zkUrl);
+    List<String> thirdeyeBrokerList = helixAdmin.getInstancesInClusterWithTag(clusterName, tag);
+    String[] thirdeyeBrokers = new String[thirdeyeBrokerList.size()];
+    for (int i = 0; i < thirdeyeBrokerList.size(); i++) {
+      String instanceName = thirdeyeBrokerList.get(i);
+      InstanceConfig instanceConfig = helixAdmin.getInstanceConfig(clusterName, instanceName);
+      thirdeyeBrokers[i] = instanceConfig.getHostName().replaceAll(BROKER_PREFIX, "") + ":"
+          + instanceConfig.getPort();
+    }
+    return fromHostList(config, controllerHost, controllerPort, thirdeyeBrokers);
   }
 
   public static PinotThirdEyeClient fromProperties(Properties properties) {
@@ -151,33 +176,13 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
   }
 
   @Override
-  public Map<DimensionKey, MetricTimeSeries> execute(ThirdEyeRequest request) throws Exception {
-    LOG.info("execute: {}", request);
-    ThirdEyeRawResponse rawResponse = getRawResponse(request);
-    // Figure out the metric types of the projection
-    StarTreeConfig starTreeConfig = getStarTreeConfig(request.getCollection());
-    Map<String, MetricType> metricTypes = new HashMap<>();
-    for (MetricSpec metricSpec : starTreeConfig.getMetrics()) {
-      String metricName = metricSpec.getName();
-      MetricType metricType = metricSpec.getType();
-      metricTypes.put(metricName, metricType);
-    }
-    List<MetricType> projectionTypes = new ArrayList<>();
-    for (String metricName : rawResponse.getMetrics()) {
-      MetricType metricType = metricTypes.get(metricName);
-      projectionTypes.add(metricType);
-    }
-    return rawResponse.convert(projectionTypes);
-  }
-
-  @Override
   public ThirdEyeRawResponse getRawResponse(ThirdEyeRequest request) throws Exception {
     StarTreeConfig starTreeConfig = getStarTreeConfig(request.getCollection());
     TimeSpec dataTimeSpec = starTreeConfig.getTime();
     List<String> rawMetrics = request.getRawMetricNames();
     List<String> dimensionNames = starTreeConfig.getDimensionNames();
 
-    String sql = PqlUtils.getPql(request, dataTimeSpec);
+    String sql = pqlGenerator.getPql(request, dataTimeSpec);
     LOG.info("getRawResponse: {}", sql);
     ResultSetGroup result = resultSetGroupCache.get(sql);
 
@@ -198,7 +203,7 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
   private Map<String, Map<String, Number[]>> parseResultSetGroup(ThirdEyeRequest request,
       ResultSetGroup result, List<String> rawMetrics, StarTreeConfig starTreeConfig,
       List<String> dimensionNames)
-          throws JsonProcessingException, RuntimeException, NumberFormatException {
+      throws JsonProcessingException, RuntimeException, NumberFormatException {
 
     // Key: dimensionKey -> timestamp
     HashMap<String, Map<String, Number[]>> data = new HashMap<String, Map<String, Number[]>>();
@@ -208,35 +213,38 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
 
     TimeGranularity bucketGranularity = starTreeConfig.getTime().getBucket();
     TimeGranularity aggGranularity = request.getTimeGranularity();
-    DateTime startTime = request.getStartTime();
+    DateTime startTime = request.getStartTimeInclusive();
 
     int columnOffset = 0; // number of observed columns from previous result sets.
-    String dimensionKey;
-    String timestamp = null;
-    List<String> dimensionKeyList = new LinkedList<String>();
-    Double[] rowData;
     for (int groupIdx = 0; groupIdx < result.getResultSetCount(); groupIdx++) {
       ResultSet resultSet = result.getResultSet(groupIdx);
       int columnCount = resultSet.getColumnCount();
       for (int row = 0; row < resultSet.getRowCount(); row++) {
+        String dimensionKey;
+        // default start time if timestamp won't appear in group key.
+        String timestamp =
+            request.shouldGroupByTime() ? null : Long.toString(startTime.getMillis());
         // determine timestamp + dimensionKey
         if (resultSet.getGroupKeyLength() > 0) {
+          List<String> dimensionKeyList = new LinkedList<String>();
           for (int group = 0; group < resultSet.getGroupKeyLength(); group++) {
             String timeKey = resultSet.getGroupKeyString(row, group);
-            if (group == 0) {
+            if (group == 0 && request.shouldGroupByTime()) {
               timestamp = calculateTimeStamp(timeKey, bucketGranularity, aggGranularity, startTime);
             } else {
               dimensionKeyList.add(timeKey);
             }
           }
           dimensionKey = String.format(baseDimensionKeyFormatter, dimensionKeyList.toArray());
-          dimensionKey = MAPPER.writeValueAsString(dimensionKey.split(","));
+          // split with -1 to allow for empty values on the last dimension (default split will
+          // discard empty trailing strings)
+          dimensionKey = MAPPER.writeValueAsString(dimensionKey.split(",", dimensionNames.size()));
         } else {
           throw new RuntimeException("Error: no dimension key can be derived from the results.");
         }
 
         // Populate column values for current result set
-        rowData = getRowData(data, rawMetrics.size(), dimensionKey, timestamp);
+        Double[] rowData = getRowData(data, rawMetrics.size(), dimensionKey, timestamp);
         for (int col = 0; col < columnCount; col++) {
           String colValStr = resultSet.getString(row, col);
           int metricIdx = col + columnOffset;
@@ -246,8 +254,6 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
       }
       // increment columnOffset to account for the result sets observed so far.
       columnOffset += columnCount;
-      dimensionKeyList.clear();
-      timestamp = null;
     }
     return data;
   }
@@ -323,7 +329,7 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
         double numeratorVal = rawData[numeratorIdx].doubleValue();
         double denominatorVal = rawData[denominatorIdx].doubleValue();
         if (denominatorVal == 0) {
-          expressionValue = null;
+          expressionValue = 0;
         } else {
           expressionValue = numeratorVal / denominatorVal;
         }
@@ -355,8 +361,21 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
     return config;
   }
 
+  /**
+   * Hardcodes a set of collections. Note that this method assumes the schemas for
+   * these collections already exist.
+   */
+  public void setFixedCollections(List<String> collections) {
+    LOG.info("Setting fixed collections: {}", collections);
+    this.fixedCollections = collections;
+  }
+
   @Override
   public List<String> getCollections() throws Exception {
+    if (this.fixedCollections != null) {
+      // assume the fixed collections are correct.
+      return fixedCollections;
+    }
     HttpGet req = new HttpGet(TABLES_ENDPOINT);
     LOG.info("Retrieving collections: {}", req);
     CloseableHttpResponse res = controllerClient.execute(controllerHost, req);
@@ -409,14 +428,18 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
   public List<SegmentDescriptor> getSegmentDescriptors(String collection) throws Exception {
     TimeSpec timeSpec = getStarTreeConfig(collection).getTime();
     String timeColumnName = timeSpec.getColumnName();
-    String sql = PqlUtils.getDataTimeRangeSql(collection, timeColumnName);
+    String sql = pqlGenerator.getDataTimeRangeSql(collection, timeColumnName);
     LOG.info("Retrieving segment: {}", sql);
     ResultSetGroup result = resultSetGroupCache.get(sql);
+    if (result.getResultSetCount() == 0) {
+      LOG.info("No segments retrieved!");
+      return Collections.emptyList();
+    }
     double minTime = result.getResultSet(0).getDouble(0);
     double maxTime = result.getResultSet(1).getDouble(0);
-    TimeUnit dataUnit = timeSpec.getBucket().getUnit();
-    long minTimeMillis = dataUnit.toMillis((long) minTime);
-    long maxTimeMillis = dataUnit.toMillis((long) maxTime);
+    TimeGranularity timeGranularity = timeSpec.getBucket();
+    long minTimeMillis = timeGranularity.toMillis((long) minTime);
+    long maxTimeMillis = timeGranularity.toMillis((long) maxTime);
     SegmentDescriptor singletonDescriptor =
         new SegmentDescriptor(null, null, null, new DateTime(minTimeMillis, DateTimeZone.UTC),
             new DateTime(maxTimeMillis, DateTimeZone.UTC));
@@ -434,7 +457,17 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
     controllerClient.close();
   }
 
-  private Schema getSchema(String collection) throws ClientProtocolException, IOException,
+  /** Method provided for mocking in unit tests */
+  PqlGenerator getPqlGenerator() {
+    return pqlGenerator;
+  }
+
+  /** Method provided for mocking in unit tests */
+  void setPqlGenerator(PqlGenerator pqlGenerator) {
+    this.pqlGenerator = pqlGenerator;
+  }
+
+  Schema getSchema(String collection) throws ClientProtocolException, IOException,
       InterruptedException, ExecutionException, TimeoutException {
     return schemaCache.get(collection);
   }
@@ -498,10 +531,12 @@ public class PinotThirdEyeClient implements ThirdEyeClient {
   }
 
   private TimeSpec fromTimeFieldSpec(TimeFieldSpec timeFieldSpec) {
-    TimeGranularity inputGranularity = new TimeGranularity(GRANULARITY_SIZE,
-        timeFieldSpec.getIncomingGranularitySpec().getTimeType());
-    TimeGranularity outputGranularity = new TimeGranularity(GRANULARITY_SIZE,
-        timeFieldSpec.getOutgoingGranularitySpec().getTimeType());
+    TimeGranularity inputGranularity =
+        new TimeGranularity(timeFieldSpec.getIncomingGranularitySpec().getTimeunitSize(),
+            timeFieldSpec.getIncomingGranularitySpec().getTimeType());
+    TimeGranularity outputGranularity =
+        new TimeGranularity(timeFieldSpec.getOutgoingGranularitySpec().getTimeunitSize(),
+            timeFieldSpec.getOutgoingGranularitySpec().getTimeType());
     TimeSpec spec = new TimeSpec(timeFieldSpec.getOutGoingTimeColumnName(), inputGranularity,
         outputGranularity, DEFAULT_TIME_RETENTION);
     return spec;

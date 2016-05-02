@@ -3,7 +3,10 @@ package com.linkedin.pinot.controller.api.restlet.resources;
 import java.io.File;
 import java.io.IOException;
 import java.util.Set;
+import java.util.TreeSet;
 
+import com.linkedin.pinot.common.metrics.ControllerMeter;
+import com.linkedin.pinot.controller.api.ControllerRestApplication;
 import org.apache.commons.io.FileUtils;
 import org.codehaus.jackson.JsonParseException;
 import org.codehaus.jackson.JsonProcessingException;
@@ -23,15 +26,15 @@ import org.slf4j.LoggerFactory;
 import com.linkedin.pinot.common.config.AbstractTableConfig;
 import com.linkedin.pinot.common.config.TableNameBuilder;
 import com.linkedin.pinot.common.utils.CommonConstants.Helix.TableType;
-import com.linkedin.pinot.controller.api.swagger.HttpVerb;
-import com.linkedin.pinot.controller.api.swagger.Parameter;
-import com.linkedin.pinot.controller.api.swagger.Paths;
-import com.linkedin.pinot.controller.api.swagger.Summary;
-import com.linkedin.pinot.controller.api.swagger.Tags;
+import com.linkedin.pinot.common.restlet.swagger.HttpVerb;
+import com.linkedin.pinot.common.restlet.swagger.Parameter;
+import com.linkedin.pinot.common.restlet.swagger.Paths;
+import com.linkedin.pinot.common.restlet.swagger.Summary;
+import com.linkedin.pinot.common.restlet.swagger.Tags;
 import com.linkedin.pinot.controller.helix.core.PinotResourceManagerResponse;
 
 
-public class PinotTableRestletResource extends PinotRestletResourceBase {
+public class PinotTableRestletResource extends BasePinotControllerRestletResource {
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotTableRestletResource.class);
   private final File baseDataDir;
   private final File tempDir;
@@ -58,6 +61,7 @@ public class PinotTableRestletResource extends PinotRestletResourceBase {
         addTable(config);
       } catch (Exception e) {
         LOGGER.error("Caught exception while adding table", e);
+        ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_ADD_ERROR, 1L);
         setStatus(Status.SERVER_ERROR_INTERNAL);
         return new StringRepresentation("Failed: " + e.getMessage());
       }
@@ -114,6 +118,7 @@ public class PinotTableRestletResource extends PinotRestletResourceBase {
         return getAllTables();
       } catch (Exception e) {
         LOGGER.error("Caught exception while fetching table ", e);
+        ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_GET_ERROR, 1L);
         setStatus(Status.SERVER_ERROR_INTERNAL);
         return PinotSegmentUploadRestletResource.exceptionToStringRepresentation(e);
       }
@@ -130,6 +135,7 @@ public class PinotTableRestletResource extends PinotRestletResourceBase {
       }
     } catch (Exception e) {
       LOGGER.error("Caught exception while fetching table ", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_GET_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
       return PinotSegmentUploadRestletResource.exceptionToStringRepresentation(e);
     }
@@ -168,7 +174,8 @@ public class PinotTableRestletResource extends PinotRestletResourceBase {
   private Representation getAllTables() throws JSONException {
     JSONObject object = new JSONObject();
     JSONArray tableArray = new JSONArray();
-    Set<String> tableNames = _pinotHelixResourceManager.getAllUniquePinotRawTableNames();
+    Set<String> tableNames = new TreeSet<String>();
+    tableNames.addAll(_pinotHelixResourceManager.getAllUniquePinotRawTableNames());
     for (String pinotTableName : tableNames) {
       tableArray.put(pinotTableName);
     }

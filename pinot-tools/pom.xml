@@ -103,8 +103,8 @@
               <mainClass>com.linkedin.pinot.tools.admin.PinotAdministrator</mainClass>
               <name>pinot-admin</name>
               <jvmSettings>
-                <initialMemorySize>10G</initialMemorySize>
-                <maxMemorySize>30G</maxMemorySize>
+                <initialMemorySize>4G</initialMemorySize>
+                <maxMemorySize>4G</maxMemorySize>
                 <extraArguments>
                   <extraArgument>-XX:MaxDirectMemorySize=30g</extraArgument>
                   <extraArgument>-Dlog4j.configuration=conf/pinot-admin-log4j.properties</extraArgument>
@@ -126,6 +126,18 @@
             <program>
               <mainClass>com.linkedin.pinot.tools.query.comparison.QueryComparison</mainClass>
               <name>query-comparator</name>
+              <jvmSettings>
+                <initialMemorySize>10G</initialMemorySize>
+                <maxMemorySize>30G</maxMemorySize>
+                <extraArguments>
+                  <extraArgument>-XX:MaxDirectMemorySize=30g</extraArgument>
+                  <extraArgument>-Dlog4j.configuration=conf/pinot-tools-log4j.properties</extraArgument>
+                </extraArguments>
+              </jvmSettings>
+            </program>
+            <program>
+              <mainClass>com.linkedin.pinot.tools.query.comparison.StarQueryComparison</mainClass>
+              <name>star-query-comparator</name>
               <jvmSettings>
                 <initialMemorySize>10G</initialMemorySize>
                 <maxMemorySize>30G</maxMemorySize>

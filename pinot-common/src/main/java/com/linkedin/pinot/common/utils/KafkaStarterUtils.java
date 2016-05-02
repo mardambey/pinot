@@ -38,11 +38,24 @@ public class KafkaStarterUtils {
   public static final String DEFAULT_KAFKA_BROKER = "localhost:" + DEFAULT_KAFKA_PORT;
 
   public static Properties getDefaultKafkaConfiguration() {
-    return new Properties();
+    final Properties configuration = new Properties();
+
+    // Enable topic deletion by default for integration tests
+    configureTopicDeletion(configuration, true);
+
+    // Set host name
+    configureHostName(configuration, "localhost");
+
+    return configuration;
   }
 
   public static KafkaServerStartable startServer(final int port, final int brokerId, final String zkStr,
       final Properties configuration) {
+    return startServer(port, brokerId, zkStr, "/tmp/kafka-" + Double.toHexString(Math.random()), configuration);
+  }
+
+  public static KafkaServerStartable startServer(final int port, final int brokerId, final String zkStr,
+      final String logDirPath, final Properties configuration) {
     // Create the ZK nodes for Kafka, if needed
     int indexOfFirstSlash = zkStr.indexOf('/');
     if (indexOfFirstSlash != -1) {
@@ -53,13 +66,14 @@ public class KafkaStarterUtils {
       client.close();
     }
 
-    File logDir = new File("/tmp/kafka-" + Double.toHexString(Math.random()));
+    File logDir = new File(logDirPath);
     logDir.mkdirs();
 
     configureKafkaPort(configuration, port);
     configureZkConnectionString(configuration, zkStr);
     configureBrokerId(configuration, brokerId);
     configureKafkaLogDirectory(configuration, logDir);
+    configuration.put("zookeeper.session.timeout.ms", "60000");
     KafkaConfig config = new KafkaConfig(configuration);
 
     KafkaServerStartable serverStartable = new KafkaServerStartable(config);
@@ -92,12 +106,26 @@ public class KafkaStarterUtils {
     configuration.put("port", Integer.toString(port));
   }
 
+  public static void configureTopicDeletion(Properties configuration, boolean topicDeletionEnabled) {
+    configuration.put("delete.topic.enable", Boolean.toString(topicDeletionEnabled));
+  }
+
+  public static void configureHostName(Properties configuration, String hostName) {
+    configuration.put("host.name", hostName);
+  }
+
   public static void stopServer(KafkaServerStartable serverStartable) {
     serverStartable.shutdown();
     FileUtils.deleteQuietly(new File(serverStartable.serverConfig().logDirs().apply(0)));
   }
 
   public static void createTopic(String kafkaTopic, String zkStr) {
+    invokeTopicCommand(
+        new String[]{"--create", "--zookeeper", zkStr, "--replication-factor", "1", "--partitions", "10", "--topic",
+            kafkaTopic});
+  }
+
+  private static void invokeTopicCommand(String[] args) {
     // jfim: Use Java security to trap System.exit in Kafka 0.9's TopicCommand
     System.setSecurityManager(new SecurityManager() {
       @Override
@@ -114,12 +142,15 @@ public class KafkaStarterUtils {
     });
 
     try {
-      TopicCommand.main(
-          new String[]{"--create", "--zookeeper", zkStr, "--replication-factor", "1", "--partitions", "10", "--topic", kafkaTopic});
+      TopicCommand.main(args);
     } catch (SecurityException ex) {
       // Do nothing, this is caused by our security manager that disables System.exit
     }
 
     System.setSecurityManager(null);
+  }
+
+  public static void deleteTopic(String kafkaTopic, String zkStr) {
+    invokeTopicCommand(new String[]{"--delete", "--zookeeper", zkStr, "--topic", kafkaTopic});
   }
 }

@@ -45,7 +45,6 @@ import com.linkedin.pinot.core.data.readers.FileFormat;
 import com.linkedin.pinot.core.data.readers.RecordReader;
 import com.linkedin.pinot.core.indexsegment.IndexSegment;
 import com.linkedin.pinot.core.indexsegment.generator.SegmentGeneratorConfig;
-import com.linkedin.pinot.core.operator.docvaliterators.UnSortedSingleValueIterator;
 import com.linkedin.pinot.core.operator.filter.StarTreeIndexOperator;
 import com.linkedin.pinot.core.plan.FilterPlanNode;
 import com.linkedin.pinot.core.segment.creator.impl.SegmentIndexCreationDriverImpl;
@@ -75,10 +74,10 @@ public class TestStarTreeIntegrationTest {
     }
 
     SegmentGeneratorConfig config = new SegmentGeneratorConfig(schema);
-    config.setCreateStarTreeIndex(true);
+    config.setEnableStarTreeIndex(true);
     String tempOutputDir = "/tmp/star-tree-index";
-    config.setIndexOutputDir(tempOutputDir);
-    config.setInputFileFormat(FileFormat.AVRO);
+    config.setOutDir(tempOutputDir);
+    config.setFormat(FileFormat.AVRO);
     config.setSegmentName("testSimple");
     SegmentIndexCreationDriverImpl driver = new SegmentIndexCreationDriverImpl();
     final List<GenericRow> data = new ArrayList<>();
@@ -105,7 +104,7 @@ public class TestStarTreeIntegrationTest {
     ReadMode mode = ReadMode.heap;
     //query to test
     String[] metricNames = new String[] { "m1" };
-    String query = "select sum(m1) from T where d2='d2-v0'";
+    String query = "select sum(m1) from T";
     Pql2Compiler compiler = new Pql2Compiler();
     BrokerRequest brokerRequest = compiler.compileToBrokerRequest(query);
 
@@ -116,36 +115,33 @@ public class TestStarTreeIntegrationTest {
     BlockDocIdIterator rawDocIdIterator = rawOperator.nextBlock().getBlockDocIdSet().iterator();
     double[] expectedSums = computeSum(segment, rawDocIdIterator, metricNames);
     System.out.println("expectedSums=" + Arrays.toString(expectedSums));
-    boolean starTreeReady = true;
-    if (starTreeReady) {
-      //dump contents
-      Iterator<GenericRow> rowIterator =
-          ((IndexSegmentImpl) segment).iterator(0, segment.getSegmentMetadata().getTotalDocs());
-      int counter = 0;
-      while (rowIterator.hasNext()) {
+    //dump contents
+    Iterator<GenericRow> rowIterator =
+        ((IndexSegmentImpl) segment).iterator(0, segment.getSegmentMetadata().getTotalDocs());
+    int counter = 0;
+    while (rowIterator.hasNext()) {
 
-        GenericRow genericRow = rowIterator.next();
-        StringBuilder sb = new StringBuilder().append(counter++).append(": \t");
-        for (String dimName : schema.getDimensionNames()) {
-          sb.append(dimName).append(":").append(genericRow.getValue(dimName)).append(", ");
-        }
-        if (schema.getTimeColumnName() != null) {
-          sb.append(schema.getTimeColumnName()).append(":").append(genericRow.getValue(schema.getTimeColumnName()))
-              .append(", ");
-        }
-        for (String metName : schema.getMetricNames()) {
-          sb.append(metName).append(":").append(genericRow.getValue(metName)).append(", ");
-        }
-        System.out.println(sb);
+      GenericRow genericRow = rowIterator.next();
+      StringBuilder sb = new StringBuilder().append(counter++).append(": \t");
+      for (String dimName : schema.getDimensionNames()) {
+        sb.append(dimName).append(":").append(genericRow.getValue(dimName)).append(", ");
       }
-
-      StarTreeIndexOperator starTreeOperator = new StarTreeIndexOperator(segment, brokerRequest);
-      starTreeOperator.open();
-      BlockDocIdIterator starTreeDocIdIterator = starTreeOperator.nextBlock().getBlockDocIdSet().iterator();
-
-      double[] actualSums = computeSum(segment, starTreeDocIdIterator, metricNames);
-      System.out.println("actualSums=" + Arrays.toString(actualSums));
+      if (schema.getTimeColumnName() != null) {
+        sb.append(schema.getTimeColumnName()).append(":").append(genericRow.getValue(schema.getTimeColumnName()))
+            .append(", ");
+      }
+      for (String metName : schema.getMetricNames()) {
+        sb.append(metName).append(":").append(genericRow.getValue(metName)).append(", ");
+      }
+      System.out.println(sb);
     }
+
+    StarTreeIndexOperator starTreeOperator = new StarTreeIndexOperator(segment, brokerRequest);
+    starTreeOperator.open();
+    BlockDocIdIterator starTreeDocIdIterator = starTreeOperator.nextBlock().getBlockDocIdSet().iterator();
+
+    double[] actualSums = computeSum(segment, starTreeDocIdIterator, metricNames);
+    System.out.println("actualSums=" + Arrays.toString(actualSums));
   }
 
   private double[] computeSum(IndexSegment segment, BlockDocIdIterator docIdIterator, String... metricNames) {

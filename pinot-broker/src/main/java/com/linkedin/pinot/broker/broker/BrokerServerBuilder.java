@@ -16,13 +16,17 @@
 package com.linkedin.pinot.broker.broker;
 
 import com.linkedin.pinot.broker.broker.helix.LiveInstancesChangeListenerImpl;
-import com.linkedin.pinot.broker.servlet.PinotBrokerDebugServlet;
+import com.linkedin.pinot.broker.servlet.PinotBrokerHealthCheckServlet;
+import com.linkedin.pinot.broker.servlet.PinotBrokerRoutingTableDebugServlet;
 import com.linkedin.pinot.broker.servlet.PinotBrokerServletContextChangeListener;
 import com.linkedin.pinot.broker.servlet.PinotClientRequestServlet;
 import com.linkedin.pinot.common.Utils;
 import com.linkedin.pinot.common.metrics.BrokerMetrics;
 import com.linkedin.pinot.common.metrics.MetricsHelper;
+import com.linkedin.pinot.common.query.ReduceServiceRegistry;
+import com.linkedin.pinot.common.response.BrokerResponseFactory;
 import com.linkedin.pinot.common.response.ServerInstance;
+import com.linkedin.pinot.core.query.reduce.BrokerReduceService;
 import com.linkedin.pinot.core.query.reduce.DefaultReduceService;
 import com.linkedin.pinot.requestHandler.BrokerRequestHandler;
 import com.linkedin.pinot.routing.CfgBasedRouting;
@@ -141,10 +145,9 @@ public class BrokerServerBuilder {
 
     ConnectionPoolConfig connPoolCfg = conf.getConnPool();
 
-    _connPool =
-        new KeyedPoolImpl<ServerInstance, NettyClientConnection>(connPoolCfg.getMinConnectionsPerServer(),
-            connPoolCfg.getMaxConnectionsPerServer(), connPoolCfg.getIdleTimeoutMs(),
-            connPoolCfg.getMaxBacklogPerServer(), _resourceManager, _poolTimeoutExecutor, _requestSenderPool, _registry);
+    _connPool = new KeyedPoolImpl<ServerInstance, NettyClientConnection>(connPoolCfg.getMinConnectionsPerServer(),
+        connPoolCfg.getMaxConnectionsPerServer(), connPoolCfg.getIdleTimeoutMs(), connPoolCfg.getMaxBacklogPerServer(),
+        _resourceManager, _poolTimeoutExecutor, _requestSenderPool, _registry);
     // MoreExecutors.sameThreadExecutor(), _registry);
     _resourceManager.setPool(_connPool);
 
@@ -171,13 +174,27 @@ public class BrokerServerBuilder {
     }
     LOGGER.info("Broker timeout is - " + brokerTimeOutMs + " ms");
 
-    _requestHandler =
-        new BrokerRequestHandler(_routingTable, _timeBoundaryService, _scatterGather, new DefaultReduceService(),
-            _brokerMetrics, brokerTimeOutMs);
-
-    //TODO: Start Broker Server : Code goes here. Broker Server part should use request handler to submit requests
+    ReduceServiceRegistry reduceServiceRegistry = buildReduceServiceRegistry();
+    _requestHandler = new BrokerRequestHandler(_routingTable, _timeBoundaryService, _scatterGather,
+        reduceServiceRegistry, _brokerMetrics, brokerTimeOutMs);
 
     LOGGER.info("Network initialized !!");
+  }
+
+  /**
+   * Build the reduce service registry for each broker response.
+   */
+  private ReduceServiceRegistry buildReduceServiceRegistry() {
+    ReduceServiceRegistry reduceServiceRegistry = new ReduceServiceRegistry();
+
+    DefaultReduceService defaultReduceService = new DefaultReduceService();
+    reduceServiceRegistry.register(BrokerResponseFactory.ResponseType.BROKER_RESPONSE_TYPE_JSON,
+        new DefaultReduceService());
+    reduceServiceRegistry.register(BrokerResponseFactory.ResponseType.BROKER_RESPONSE_TYPE_NATIVE,
+        new BrokerReduceService());
+
+    reduceServiceRegistry.registerDefault(defaultReduceService);
+    return reduceServiceRegistry;
   }
 
   public void buildHTTP() {
@@ -189,8 +206,9 @@ public class BrokerServerBuilder {
 
     WebAppContext context = new WebAppContext();
     context.addServlet(PinotClientRequestServlet.class, "/query");
-    context.addServlet(PinotBrokerDebugServlet.class, "/debug");
-    
+    context.addServlet(PinotBrokerHealthCheckServlet.class, "/health");
+    context.addServlet(PinotBrokerRoutingTableDebugServlet.class, "/debug/routingTable/*");
+
     if (clientConfig.enableConsole()) {
       context.setResourceBase(clientConfig.getConsoleWebappPath());
     } else {
@@ -198,7 +216,7 @@ public class BrokerServerBuilder {
     }
 
     context.addEventListener(new PinotBrokerServletContextChangeListener(_requestHandler, _brokerMetrics));
-
+    context.setAttribute(BrokerServerBuilder.class.toString(), this);
     _server.setHandler(context);
   }
 
@@ -241,8 +259,8 @@ public class BrokerServerBuilder {
     LOGGER.info("Stopped Jetty server !!");
   }
 
-  public boolean isStart() {
-    return _state.get() == State.STARTING;
+  public State getCurrentState() {
+    return _state.get();
   }
 
   public RoutingTable getRoutingTable() {
@@ -251,5 +269,9 @@ public class BrokerServerBuilder {
 
   public BrokerMetrics getBrokerMetrics() {
     return _brokerMetrics;
+  }
+
+  public BrokerRequestHandler getBrokerRequestHandler() {
+    return _requestHandler;
   }
 }

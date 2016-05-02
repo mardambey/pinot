@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import com.google.common.collect.HashBiMap;
 import com.linkedin.pinot.core.data.GenericRow;
+import java.util.Set;
 
 
 public interface StarTreeBuilder {
@@ -32,21 +33,26 @@ public interface StarTreeBuilder {
    *  The maximum number of records that can exist at a leaf, if there are still split dimensions available.
    * @param table
    *  The temporary table to store dimensional data.
-   * @throws Exception 
+   * @throws Exception
    */
   void init(StarTreeBuilderConfig config) throws Exception;
 
   /**
    * Adds a possibly non-unique dimension combination to the StarTree table.
-   * @throws Exception 
+   * @throws Exception
    */
   void append(GenericRow row) throws Exception;
 
   /**
    * Builds the StarTree, called after all calls to append (after build);
-   * @throws Exception 
+   * @throws Exception
    */
   void build() throws Exception;
+
+  /**
+   * Clean up any temporary files/directories, called at the end.
+   */
+  void cleanup();
 
   /**
    * Returns the root node of the tree (after build).
@@ -54,9 +60,9 @@ public interface StarTreeBuilder {
   StarTree getTree();
 
   /**
-   * 
+   *
    * @return
-   * @throws Exception 
+   * @throws Exception
    */
   Iterator<GenericRow> iterator(int startDocId, int endDocId) throws Exception;
 
@@ -76,11 +82,13 @@ public interface StarTreeBuilder {
   int getMaxLeafRecords();
 
   /**
-   * Returns the split order 
+   * Returns the split order
    */
-  List<String> getSplitOrder();
+  List<String> getDimensionsSplitOrder();
 
   Map<String, HashBiMap<Object, Integer>> getDictionaryMap();
 
   HashBiMap<String, Integer> getDimensionNameToIndexMap();
+
+  Set<String> getSkipMaterializationForDimensions();
 }

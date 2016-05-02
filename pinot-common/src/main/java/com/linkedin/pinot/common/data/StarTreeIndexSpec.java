@@ -23,18 +23,18 @@ import java.util.Set;
 
 public class StarTreeIndexSpec {
   public static final Integer DEFAULT_MAX_LEAF_RECORDS = 100000; // TODO: determine a good number via experiment
+  public static final int DEFAULT_SKIP_MATERIALIZATION_CARDINALITY_THRESHOLD = 10000;
 
   /** The upper bound on the number of leaf records to be scanned for any query */
   private Integer maxLeafRecords = DEFAULT_MAX_LEAF_RECORDS;
 
   /** Dimension split order (if null or absent, descending w.r.t. dimension cardinality) */
-  private List<String> splitOrder;
+  private List<String> dimensionsSplitOrder;
 
-  /** The dimensions that should be included in the tree, but never split on (e.g. time) */
-  private List<String> splitExcludes;
-
-  /** The dimensions that should not be included in the tree (i.e. always interpret at aggregate level) */
-  private List<String> excludedDimensions = Collections.emptyList();
+  /** Dimensions for which to exclude star nodes at split. */
+  private Set<String> skipStarNodeCreationForDimensions = Collections.emptySet();
+  private Set<String> _skipMaterializationForDimensions;
+  private int skipMaterializationCardinalityThreshold = DEFAULT_SKIP_MATERIALIZATION_CARDINALITY_THRESHOLD;
 
   public StarTreeIndexSpec() {}
 
@@ -46,28 +46,36 @@ public class StarTreeIndexSpec {
     this.maxLeafRecords = maxLeafRecords;
   }
 
-  public List<String> getSplitOrder() {
-    return splitOrder;
+  public List<String> getDimensionsSplitOrder() {
+    return dimensionsSplitOrder;
   }
 
-  public void setSplitOrder(List<String> splitOrder) {
-    this.splitOrder = splitOrder;
+  public void setDimensionsSplitOrder(List<String> dimensionsSplitOrder) {
+    this.dimensionsSplitOrder = dimensionsSplitOrder;
   }
 
-  public List<String> getSplitExcludes() {
-    return splitExcludes;
+  public void setSkipStarNodeCreationForDimensions(Set<String> skipStarNodeCreationForDimensions) {
+    this.skipStarNodeCreationForDimensions = skipStarNodeCreationForDimensions;
   }
 
-  public void setSplitExcludes(List<String> splitExcludes) {
-    this.splitExcludes = splitExcludes;
+  public Set<String> getSkipStarNodeCreationForDimensions() {
+    return skipStarNodeCreationForDimensions;
   }
 
-  public List<String> getExcludedDimensions() {
-    return excludedDimensions;
+  public Set<String> getskipMaterializationForDimensions() {
+    return _skipMaterializationForDimensions;
   }
 
-  public void setExcludedDimensions(List<String> excludedDimensions) {
-    this.excludedDimensions = excludedDimensions;
+  public void setSkipMaterializationForDimensions(Set<String> skipMaterializationForDimensions) {
+    _skipMaterializationForDimensions = skipMaterializationForDimensions;
+  }
+
+  public int getskipMaterializationCardinalityThreshold() {
+    return skipMaterializationCardinalityThreshold;
+  }
+
+  public void setSkipMaterializationCardinalityThreshold(int skipMaterializationCardinalityThreshold) {
+    this.skipMaterializationCardinalityThreshold = skipMaterializationCardinalityThreshold;
   }
 
   @Override
@@ -77,23 +85,19 @@ public class StarTreeIndexSpec {
     }
     StarTreeIndexSpec s = (StarTreeIndexSpec) o;
     return Objects.equal(maxLeafRecords, s.getMaxLeafRecords())
-        && Objects.equal(splitExcludes, s.getSplitExcludes())
-        && Objects.equal(excludedDimensions, s.getExcludedDimensions())
-        && Objects.equal(splitOrder, s.getSplitOrder());
+        && Objects.equal(dimensionsSplitOrder, s.getDimensionsSplitOrder());
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(maxLeafRecords, splitOrder, splitExcludes, excludedDimensions);
+    return Objects.hashCode(maxLeafRecords, dimensionsSplitOrder);
   }
 
   @Override
   public String toString() {
     return Objects.toStringHelper(this)
         .add("maxLeafRecords", maxLeafRecords)
-        .add("splitExcludes", splitExcludes)
-        .add("excludedDimensions", excludedDimensions)
-        .add("splitOrder", splitOrder)
+        .add("dimensionsSplitOrder", dimensionsSplitOrder)
         .toString();
   }
 }

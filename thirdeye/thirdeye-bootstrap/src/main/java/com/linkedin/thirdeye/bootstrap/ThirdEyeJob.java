@@ -166,6 +166,7 @@ public class ThirdEyeJob {
   private static final String DATA_FOLDER_JOINER = "_";
   private static final String TEMPORARY_FOLDER = "_temporary";
   private static final String DEFAULT_CONVERTER_CLASS = ThirdEyeAvroUtils.class.getName();
+  private static final String DEFAULT_THIRDEYE_AGG_JOB_DUMP_STATISTICS = "false";
 
   protected enum FlowSpec {
     DIMENSION_INDEX,
@@ -306,9 +307,15 @@ public class ThirdEyeJob {
                 + StarTreeConstants.METRIC_SUMS_FOLDER + File.separator
                 + StarTreeConstants.METRIC_SUMS_FILE);
 
-        config.setProperty(AggregationJobConstants.AGG_CONVERTER_CLASS.toString(),
-            inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_INPUT_CONVERTER_CLASS.getName(),
-                DEFAULT_CONVERTER_CLASS));
+        String converterClass = inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_INPUT_CONVERTER_CLASS.getName(), DEFAULT_CONVERTER_CLASS);
+        if (converterClass.isEmpty()) {
+          converterClass = DEFAULT_CONVERTER_CLASS;
+        }
+        config.setProperty(AggregationJobConstants.AGG_CONVERTER_CLASS.toString(), converterClass);
+
+        config.setProperty(AggregationJobConstants.AGG_JOB_DUMP_STATISTICS.toString(),
+            inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_AGG_JOB_DUMP_STATISTICS.getName(),
+                DEFAULT_THIRDEYE_AGG_JOB_DUMP_STATISTICS));
 
         return config;
       }
@@ -334,13 +341,26 @@ public class ThirdEyeJob {
             getPinotSchemaPath(root, collection));
         config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_CONFIG_PATH.toString(),
             getConfigPath(root, collection));
-        config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_INPUT_PATH.toString(),
-            getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator + AGGREGATION.getName());
+        String inputPath = getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator;
+        FileSystem fs = FileSystem.get(new Configuration());
+        if (fs.exists(new Path(inputPath + TOPK_ROLLUP_PHASE3.getName()))) {
+          inputPath = inputPath + TOPK_ROLLUP_PHASE3.getName();
+        } else if (fs.exists(new Path(inputPath + ROLLUP_PHASE4.getName()))) {
+          inputPath = inputPath + ROLLUP_PHASE4.getName();
+        } else {
+          inputPath = inputPath + AGGREGATION.getName();
+        }
+        config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_INPUT_PATH.toString(), inputPath);
         config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_OUTPUT_PATH.toString(),
             getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator + SEGMENT_CREATION.getName());
         config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_SEGMENT_TABLE_NAME.toString(),
             collection);
-
+        config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_WALLCLOCK_START_TIME.toString(),
+            String.valueOf(minTime.getMillis()));
+        config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_WALLCLOCK_END_TIME.toString(),
+            String.valueOf(maxTime.getMillis()));
+        String schedule = inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_FLOW_SCHEDULE.getName());
+        config.setProperty(SegmentCreationPhaseConstants.SEGMENT_CREATION_SCHEDULE.toString(), schedule);
         return config;
       }
     },
@@ -367,6 +387,8 @@ public class ThirdEyeJob {
             inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_PINOT_CONTROLLER_HOSTS.getName()));
         config.setProperty(SegmentPushPhaseConstants.SEGMENT_PUSH_CONTROLLER_PORT.toString(),
             inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_PINOT_CONTROLLER_PORT.getName()));
+        config.setProperty(SegmentPushPhaseConstants.SEGMENT_PUSH_TABLENAME.toString(),
+            inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_COLLECTION.getName()));
         return config;
       }
     },
@@ -666,17 +688,17 @@ public class ThirdEyeJob {
         config.setProperty(StarTreeGenerationConstants.STAR_TREE_GEN_CONFIG_PATH.toString(),
             getConfigPath(root, collection));
 
-        boolean isTopK = Boolean.parseBoolean(
-            inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_TOPK.getName(), DEFAULT_TOPK));
-        if (isTopK) {
-          config.setProperty(StarTreeGenerationConstants.STAR_TREE_GEN_INPUT_PATH.toString(),
-              getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator
-                  + TOPK_ROLLUP_PHASE3.getName());
+        String inputPath = getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator;
+        FileSystem fs = FileSystem.get(new Configuration());
+        if (fs.exists(new Path(inputPath + TOPK_ROLLUP_PHASE3.getName()))) {
+          inputPath = inputPath + TOPK_ROLLUP_PHASE3.getName();
+        } else if (fs.exists(new Path(inputPath + ROLLUP_PHASE4.getName()))) {
+          inputPath = inputPath + ROLLUP_PHASE4.getName();
         } else {
-          config.setProperty(StarTreeGenerationConstants.STAR_TREE_GEN_INPUT_PATH.toString(),
-              getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator
-                  + ROLLUP_PHASE4.getName());
+          inputPath = inputPath + AGGREGATION.getName();
         }
+        config.setProperty(StarTreeGenerationConstants.STAR_TREE_GEN_INPUT_PATH.toString(), inputPath);
+
         config.setProperty(StarTreeGenerationConstants.STAR_TREE_GEN_OUTPUT_PATH.toString(),
             getMetricIndexDir(root, collection, flowSpec, minTime, maxTime) + File.separator
                 + STARTREE_GENERATION.getName());
@@ -732,10 +754,13 @@ public class ThirdEyeJob {
             inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_COMPACTION.getName(),
                 DEFAULT_THIRDEYE_COMPACTION));
 
+        String converterClass = inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_INPUT_CONVERTER_CLASS.getName(),
+            DEFAULT_CONVERTER_CLASS);
+        if (converterClass.isEmpty()) {
+          converterClass = DEFAULT_CONVERTER_CLASS;
+        }
         config.setProperty(
-            StarTreeBootstrapPhaseOneConstants.STAR_TREE_BOOTSTRAP_CONVERTER_CLASS.toString(),
-            inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_INPUT_CONVERTER_CLASS.getName(),
-                DEFAULT_CONVERTER_CLASS));
+            StarTreeBootstrapPhaseOneConstants.STAR_TREE_BOOTSTRAP_CONVERTER_CLASS.toString(), converterClass);
 
         return config;
       }
@@ -840,8 +865,8 @@ public class ThirdEyeJob {
             thirdeyeCleanupDaysAgo);
 
         String thirdeyeCleanupSkip = inputConfig.getProperty(
-            ThirdEyeJobConstants.THIRDEYE_CLEANUP_DAYSAGO.getName(), DEFAULT_CLEANUP_SKIP);
-        config.setProperty(ThirdEyeJobConstants.THIRDEYE_CLEANUP_DAYSAGO.getName(),
+            ThirdEyeJobConstants.THIRDEYE_CLEANUP_SKIP.getName(), DEFAULT_CLEANUP_SKIP);
+        config.setProperty(ThirdEyeJobConstants.THIRDEYE_CLEANUP_SKIP.getName(),
             thirdeyeCleanupSkip);
 
         String schedule =
@@ -1020,6 +1045,9 @@ public class ThirdEyeJob {
     Path dataPath = new Path(bootstrapPhase2Output);
     String outputTarGzFile = metricIndexDir + "/data.tar.gz";
     Path outputTarGzFilePath = new Path(outputTarGzFile);
+    if (fileSystem.exists(outputTarGzFilePath)) {
+      fileSystem.delete(outputTarGzFilePath, false);
+    }
 
     LOGGER.info("START: Creating output {} to upload to server ", outputTarGzFilePath.getName());
     fileSystem.delete(new Path(dataPath, StarTreeConstants.METADATA_FILE_NAME), false);
@@ -1337,7 +1365,7 @@ public class ThirdEyeJob {
       String thirdeyeCheckCompletenessClass = inputConfig
           .getProperty(ThirdEyeJobConstants.THIRDEYE_CHECK_COMPLETENESS_CLASS.getName());
 
-      if (thirdeyeCheckCompletenessClass != null) {
+      if (thirdeyeCheckCompletenessClass != null && !thirdeyeCheckCompletenessClass.isEmpty()) {
 
         LOGGER.info("Initializing class {}", thirdeyeCheckCompletenessClass);
         Constructor<?> constructor = Class.forName(thirdeyeCheckCompletenessClass).getConstructor();
@@ -1375,61 +1403,76 @@ public class ThirdEyeJob {
             DEFAULT_THIRDEYE_PRESERVE_TIME_COMPACTION));
 
         // list folders in dimensionDir starting with data_
-        FileStatus[] fileStatus = fileSystem.listStatus(dimensionIndexDir, new PathFilter() {
+        if (fileSystem.exists(dimensionIndexDir)) {
+          FileStatus[] fileStatus = fileSystem.listStatus(dimensionIndexDir, new PathFilter() {
 
-          @Override
-          public boolean accept(Path path) {
+            @Override
+            public boolean accept(Path path) {
 
-            return path.getName().startsWith(StarTreeConstants.DATA_DIR_PREFIX);
-          }
-        });
-
-        for (FileStatus file : fileStatus) {
-          if (preserveAggregation) {
-            FileStatus[] phases = fileSystem.listStatus(file.getPath(), new PathFilter() {
-
-              @Override
-              public boolean accept(Path path) {
-                return !path.getName().equals(PhaseSpec.AGGREGATION.getName());
-              }
-            });
-            for (FileStatus phase : phases) {
-              cleanupFolder(phase, cleanupDaysAgoDate, fileSystem);
+              return path.getName().startsWith(StarTreeConstants.DATA_DIR_PREFIX);
             }
-          } else {
-            cleanupFolder(file, cleanupDaysAgoDate, fileSystem);
+          });
+
+          for (FileStatus file : fileStatus) {
+            if (preserveAggregation) {
+              FileStatus[] phases = fileSystem.listStatus(file.getPath(), new PathFilter() {
+
+                @Override
+                public boolean accept(Path path) {
+                  return !path.getName().equals(PhaseSpec.AGGREGATION.getName())
+                      && !path.getName().equals(PhaseSpec.SEGMENT_CREATION.getName());
+                }
+              });
+              for (FileStatus phase : phases) {
+                cleanupFolder(phase, cleanupDaysAgoDate, fileSystem);
+              }
+            } else {
+              FileStatus[] phases = fileSystem.listStatus(file.getPath(), new PathFilter() {
+
+                @Override
+                public boolean accept(Path path) {
+                  return !path.getName().equals(PhaseSpec.SEGMENT_CREATION.getName());
+                }
+              });
+              for (FileStatus phase : phases) {
+                cleanupFolder(phase, cleanupDaysAgoDate, fileSystem);
+              }
+              cleanupFolder(file, cleanupDaysAgoDate, fileSystem);
+            }
           }
         }
 
         // list folders in metricDir starting with data_
-        fileStatus = fileSystem.listStatus(metricIndexDir, new PathFilter() {
+        if (fileSystem.exists(metricIndexDir)) {
+          FileStatus[] fileStatus = fileSystem.listStatus(metricIndexDir, new PathFilter() {
 
-          @Override
-          public boolean accept(Path path) {
+            @Override
+            public boolean accept(Path path) {
 
-            return path.getName().startsWith(StarTreeConstants.DATA_DIR_PREFIX);
-          }
-        });
-
-        for (FileStatus file : fileStatus) {
-          // get last modified date
-          DateTime lastModifiedDate = new DateTime(file.getModificationTime());
-
-          if (lastModifiedDate.isBefore(cleanupDaysAgoDate.getMillis())) {
-            Path startreeBootstrapPath1 = new Path(file.getPath(),
-                PhaseSpec.STARTREE_BOOTSTRAP_PHASE1.getName().toLowerCase());
-            if (fileSystem.exists(startreeBootstrapPath1)) {
-              LOGGER.info("Deleting {}", startreeBootstrapPath1);
-              fileSystem.delete(startreeBootstrapPath1, true);
+              return path.getName().startsWith(StarTreeConstants.DATA_DIR_PREFIX);
             }
+          });
 
-            Path startreeBootstrapPath2 = new Path(file.getPath(),
-                PhaseSpec.STARTREE_BOOTSTRAP_PHASE2.getName().toLowerCase());
-            if (fileSystem.exists(startreeBootstrapPath2)) {
-              LOGGER.info("Deleting {}", startreeBootstrapPath2);
-              fileSystem.delete(startreeBootstrapPath2, true);
+          for (FileStatus file : fileStatus) {
+            // get last modified date
+            DateTime lastModifiedDate = new DateTime(file.getModificationTime());
+
+            if (lastModifiedDate.isBefore(cleanupDaysAgoDate.getMillis())) {
+              Path startreeBootstrapPath1 = new Path(file.getPath(),
+                  PhaseSpec.STARTREE_BOOTSTRAP_PHASE1.getName().toLowerCase());
+              if (fileSystem.exists(startreeBootstrapPath1)) {
+                LOGGER.info("Deleting {}", startreeBootstrapPath1);
+                fileSystem.delete(startreeBootstrapPath1, true);
+              }
+
+              Path startreeBootstrapPath2 = new Path(file.getPath(),
+                  PhaseSpec.STARTREE_BOOTSTRAP_PHASE2.getName().toLowerCase());
+              if (fileSystem.exists(startreeBootstrapPath2)) {
+                LOGGER.info("Deleting {}", startreeBootstrapPath2);
+                fileSystem.delete(startreeBootstrapPath2, true);
+              }
+
             }
-
           }
         }
 
@@ -1512,7 +1555,7 @@ public class ThirdEyeJob {
   private void setMapreduceConfig(Configuration configuration) {
     String mapreduceConfig =
         inputConfig.getProperty(ThirdEyeJobConstants.THIRDEYE_MR_CONF.getName());
-    if (mapreduceConfig != null) {
+    if (mapreduceConfig != null && !mapreduceConfig.isEmpty()) {
       String[] options = mapreduceConfig.split(",");
       for (String option : options) {
         String[] configs = option.split("=", 2);

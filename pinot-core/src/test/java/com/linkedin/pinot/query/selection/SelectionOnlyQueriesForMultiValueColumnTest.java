@@ -25,16 +25,18 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.commons.io.FileUtils;
 import org.json.JSONObject;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
+
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.common.request.FilterOperator;
 import com.linkedin.pinot.common.request.Selection;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -57,7 +59,6 @@ import com.linkedin.pinot.core.operator.filter.MatchEntireSegmentOperator;
 import com.linkedin.pinot.core.operator.query.MSelectionOnlyOperator;
 import com.linkedin.pinot.core.plan.Plan;
 import com.linkedin.pinot.core.plan.PlanNode;
-import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV0;
 import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import com.linkedin.pinot.core.plan.maker.PlanMaker;
 import com.linkedin.pinot.core.query.reduce.DefaultReduceService;
@@ -96,6 +97,13 @@ public class SelectionOnlyQueriesForMultiValueColumnTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    if (_indexSegment != null) {
+      _indexSegment.destroy();
+    }
+    for (IndexSegment segment : _indexSegmentList) {
+      segment.destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegment() throws Exception {
@@ -177,7 +185,7 @@ public class SelectionOnlyQueriesForMultiValueColumnTest {
   public void testInnerSegmentPlanMakerForSelectionNoFilter() throws Exception {
     setupSegment();
     final BrokerRequest brokerRequest = getSelectionNoFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     final MSelectionOnlyOperator operator = (MSelectionOnlyOperator) rootPlanNode.run();
@@ -225,7 +233,7 @@ public class SelectionOnlyQueriesForMultiValueColumnTest {
   public void testInnerSegmentPlanMakerForSelectionWithFilter() throws Exception {
     setupSegment();
     final BrokerRequest brokerRequest = getSelectionWithFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     final MSelectionOnlyOperator operator = (MSelectionOnlyOperator) rootPlanNode.run();
@@ -287,7 +295,7 @@ public class SelectionOnlyQueriesForMultiValueColumnTest {
     final DefaultReduceService defaultReduceService = new DefaultReduceService();
     final Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
-    final BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    final BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     System.out.println("Selection Result : " + brokerResponse.getSelectionResults());
     System.out.println("Time used : " + brokerResponse.getTimeUsedMs());
     System.out.println("Broker Response  : " + brokerResponse);
@@ -309,7 +317,7 @@ public class SelectionOnlyQueriesForMultiValueColumnTest {
   }
 
   private List<SegmentDataManager> makeSegMgrList(List<IndexSegment> indexSegmentList) {
-    List<SegmentDataManager> segMgrList = new ArrayList(indexSegmentList.size());
+    List<SegmentDataManager> segMgrList = new ArrayList<SegmentDataManager>(indexSegmentList.size());
     for (IndexSegment segment : indexSegmentList) {
       segMgrList.add(new OfflineSegmentDataManager(segment));
     }

@@ -15,10 +15,15 @@
  */
 package com.linkedin.pinot.controller;
 
+import com.linkedin.pinot.controller.helix.ControllerExternalViewChangeListener;
 import java.io.File;
+import java.util.List;
 import java.util.concurrent.Callable;
 
+import org.apache.helix.ExternalViewChangeListener;
+import org.apache.helix.NotificationContext;
 import org.apache.helix.PreConnectCallback;
+import org.apache.helix.model.ExternalView;
 import org.restlet.Application;
 import org.restlet.Component;
 import org.restlet.Context;
@@ -111,6 +116,13 @@ public class ControllerStarter {
     MetricsHelper.registerMetricsRegistry(_metricsRegistry);
     final ControllerMetrics controllerMetrics = new ControllerMetrics(_metricsRegistry);
 
+    try {
+      helixResourceManager.getHelixZkManager().addExternalViewChangeListener(
+          new ControllerExternalViewChangeListener(controllerMetrics));
+    } catch (Exception e) {
+      LOGGER.error("Caught exception while adding external view change listener", e);
+    }
+
     controllerMetrics.addCallbackGauge(
             "helix.connected",
             new Callable<Long>() {
@@ -129,11 +141,13 @@ public class ControllerStarter {
             });
 
     helixResourceManager.getHelixZkManager().addPreConnectCallback(new PreConnectCallback() {
-          @Override
-          public void onPreConnect() {
-            controllerMetrics.addMeteredValue(null, ControllerMeter.HELIX_ZOOKEEPER_RECONNECTS, 1L);
-          }
-        });
+      @Override
+      public void onPreConnect() {
+        controllerMetrics.addMeteredGlobalValue(ControllerMeter.HELIX_ZOOKEEPER_RECONNECTS, 1L);
+      }
+    });
+    controllerMetrics.initializeGlobalMeters();
+    ControllerRestApplication.setControllerMetrics(controllerMetrics);
   }
 
   public void stop() {

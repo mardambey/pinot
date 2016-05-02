@@ -96,6 +96,7 @@ public abstract class ClusterTest extends ControllerTest {
             Server.DEFAULT_INSTANCE_SEGMENT_TAR_DIR + "-" + i);
         configuration.setProperty(Server.CONFIG_OF_NETTY_PORT,
             Integer.toString(Integer.valueOf(Helix.DEFAULT_SERVER_NETTY_PORT) + i));
+        configuration.setProperty(Server.CONFIG_OF_ADMIN_API_PORT, Server.DEFAULT_ADMIN_API_PORT);
         overrideOfflineServerConf(configuration);
         _serverStarters.add(new HelixServerStarter(getHelixClusterName(), ZkStarter.DEFAULT_ZK_STR, configuration));
       }
@@ -156,6 +157,11 @@ public abstract class ClusterTest extends ControllerTest {
         ControllerRequestURLBuilder.baseUrl(CONTROLLER_BASE_API_URL).forTableDelete(tableName + "_OFFLINE"));
   }
 
+  protected void dropRealtimeTable(String tableName) throws Exception {
+    sendDeleteRequest(
+        ControllerRequestURLBuilder.baseUrl(CONTROLLER_BASE_API_URL).forTableDelete(tableName + "_REALTIME"));
+  }
+
   public static class AvroFileSchemaKafkaAvroMessageDecoder implements KafkaMessageDecoder {
     private static final Logger LOGGER = LoggerFactory.getLogger(AvroFileSchemaKafkaAvroMessageDecoder.class);
     public static File avroFile;
@@ -189,15 +195,17 @@ public abstract class ClusterTest extends ControllerTest {
 
   protected void addRealtimeTable(String tableName, String timeColumnName, String timeColumnType, int retentionDays,
       String retentionTimeUnit, String kafkaZkUrl, String kafkaTopic, String schemaName, String serverTenant,
-      String brokerTenant, File avroFile, int realtimeSegmentFlushSize) throws Exception {
+      String brokerTenant, File avroFile, int realtimeSegmentFlushSize, String sortedColumn) throws Exception {
     List<String> invertedIndexColumns = Collections.emptyList();
     addRealtimeTable(tableName, timeColumnName, timeColumnType, retentionDays, retentionTimeUnit, kafkaZkUrl,
-        kafkaTopic, schemaName, serverTenant, brokerTenant, avroFile, realtimeSegmentFlushSize, invertedIndexColumns);
+        kafkaTopic, schemaName, serverTenant, brokerTenant, avroFile, realtimeSegmentFlushSize, sortedColumn,
+        invertedIndexColumns);
   }
 
   protected void addRealtimeTable(String tableName, String timeColumnName, String timeColumnType, int retentionDays,
       String retentionTimeUnit, String kafkaZkUrl, String kafkaTopic, String schemaName, String serverTenant,
-      String brokerTenant, File avroFile, int realtimeSegmentFlushSize, List<String> invertedIndexColumns)
+      String brokerTenant, File avroFile, int realtimeSegmentFlushSize, String sortedColumn,
+      List<String> invertedIndexColumns)
           throws Exception {
     JSONObject metadata = new JSONObject();
     metadata.put("streamType", "kafka");
@@ -213,7 +221,7 @@ public abstract class ClusterTest extends ControllerTest {
 
     JSONObject request = ControllerRequestBuilder.buildCreateRealtimeTableJSON(tableName, serverTenant, brokerTenant,
         timeColumnName, timeColumnType, retentionTimeUnit, Integer.toString(retentionDays), 1,
-        "BalanceNumSegmentAssignmentStrategy", metadata, schemaName, invertedIndexColumns);
+        "BalanceNumSegmentAssignmentStrategy", metadata, schemaName, sortedColumn, invertedIndexColumns);
     sendPostRequest(ControllerRequestURLBuilder.baseUrl(CONTROLLER_BASE_API_URL).forTableCreate(), request.toString());
 
     AvroFileSchemaKafkaAvroMessageDecoder.avroFile = avroFile;
@@ -221,13 +229,14 @@ public abstract class ClusterTest extends ControllerTest {
   }
 
   protected void addHybridTable(String tableName, String timeColumnName, String timeColumnType, String kafkaZkUrl,
-      String kafkaTopic, String schemaName, String serverTenant, String brokerTenant, File avroFile) throws Exception {
+      String kafkaTopic, String schemaName, String serverTenant, String brokerTenant, File avroFile,
+      String sortedColumn, List<String> invertedIndexColumns) throws Exception {
     int retentionDays = 900;
     String retentionTimeUnit = "Days";
     addRealtimeTable(tableName, timeColumnName, timeColumnType, retentionDays, retentionTimeUnit, kafkaZkUrl,
-        kafkaTopic, schemaName, serverTenant, brokerTenant, avroFile, 20000, new ArrayList<String>());
+        kafkaTopic, schemaName, serverTenant, brokerTenant, avroFile, 20000, sortedColumn, invertedIndexColumns);
     addOfflineTable(tableName, timeColumnName, timeColumnType, retentionDays, retentionTimeUnit, brokerTenant,
-        serverTenant);
+        serverTenant, invertedIndexColumns);
   }
 
   protected void createBrokerTenant(String tenantName, int brokerCount) throws Exception {

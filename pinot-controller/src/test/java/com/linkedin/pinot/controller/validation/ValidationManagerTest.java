@@ -15,12 +15,14 @@
  */
 package com.linkedin.pinot.controller.validation;
 
+import com.linkedin.pinot.common.segment.StarTreeMetadata;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import com.linkedin.pinot.common.utils.SegmentNameBuilder;
 import org.apache.helix.manager.zk.ZkClient;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -77,9 +79,8 @@ public class ValidationManagerTest {
     ControllerRequestBuilderUtil.addFakeDataInstancesToAutoJoinHelixCluster(HELIX_CLUSTER_NAME, ZK_STR, 2, true);
     ControllerRequestBuilderUtil.addFakeBrokerInstancesToAutoJoinHelixCluster(HELIX_CLUSTER_NAME, ZK_STR, 2, true);
 
-    String OfflineTableConfigJson =
-        ControllerRequestBuilderUtil.buildCreateOfflineTableJSON(testTableName, null, null, "timestamp",
-            "millsSinceEpoch", "DAYS", "5", 2, "BalanceNumSegmentAssignmentStrategy").toString();
+    String OfflineTableConfigJson = ControllerRequestBuilderUtil.buildCreateOfflineTableJSON(testTableName, null, null,
+        "timestamp", "millsSinceEpoch", "DAYS", "5", 2, "BalanceNumSegmentAssignmentStrategy").toString();
     AbstractTableConfig offlineTableConfig = AbstractTableConfig.init(OfflineTableConfigJson);
     _pinotHelixResourceManager.addTable(offlineTableConfig);
 
@@ -89,9 +90,8 @@ public class ValidationManagerTest {
 
     Thread.sleep(1000);
 
-    OfflineSegmentZKMetadata offlineSegmentZKMetadata =
-        ZKMetadataProvider.getOfflineSegmentZKMetadata(_pinotHelixResourceManager.getPropertyStore(),
-            metadata.getTableName(), metadata.getName());
+    OfflineSegmentZKMetadata offlineSegmentZKMetadata = ZKMetadataProvider.getOfflineSegmentZKMetadata(
+        _pinotHelixResourceManager.getPropertyStore(), metadata.getTableName(), metadata.getName());
 
     SegmentMetadata fetchedMetadata = new SegmentMetadataImpl(offlineSegmentZKMetadata);
     long pushTime = fetchedMetadata.getPushTime();
@@ -108,9 +108,8 @@ public class ValidationManagerTest {
 
     Thread.sleep(1000);
 
-    offlineSegmentZKMetadata =
-        ZKMetadataProvider.getOfflineSegmentZKMetadata(_pinotHelixResourceManager.getPropertyStore(),
-            metadata.getTableName(), metadata.getName());
+    offlineSegmentZKMetadata = ZKMetadataProvider.getOfflineSegmentZKMetadata(
+        _pinotHelixResourceManager.getPropertyStore(), metadata.getTableName(), metadata.getName());
     fetchedMetadata = new SegmentMetadataImpl(offlineSegmentZKMetadata);
 
     // Check that the segment still has the same push time
@@ -122,10 +121,10 @@ public class ValidationManagerTest {
   }
 
   @Test
-  public void testTotalDocumentCount() throws Exception {
+  public void testTotalDocumentCountOffline() throws Exception {
 
     // Create a bunch of dummy segments
-    String testTableName  = "TestTableTotalDocCountTest";
+    String testTableName = "TestTableTotalDocCountTest";
     DummyMetadata metadata1 = new DummyMetadata(testTableName, 10);
     DummyMetadata metadata2 = new DummyMetadata(testTableName, 20);
     DummyMetadata metadata3 = new DummyMetadata(testTableName, 30);
@@ -136,10 +135,37 @@ public class ValidationManagerTest {
     segmentMetadataList.add(metadata2);
     segmentMetadataList.add(metadata3);
 
-    Assert.assertEquals(ValidationManager.computeTotalDocumentInSegments(segmentMetadataList), 60);
+    Assert.assertEquals(ValidationManager.computeOfflineTotalDocumentInSegments(segmentMetadataList), 60);
 
   }
 
+  @Test
+  public void testTotalDocumentCountRealTime() throws Exception {
+
+    // Create a bunch of dummy segments
+    String testTableName = "TestTableTotalDocCountTest";
+    String segmentName1 = SegmentNameBuilder.Realtime.build("groupid_1", "0", "1");
+    String segmentName2 = SegmentNameBuilder.Realtime.build("groupid_1", "0", "2");
+    String segmentName3 = SegmentNameBuilder.Realtime.build("groupid_1", "0", "3");
+    String segmentName4 = SegmentNameBuilder.Realtime.build("groupid_2", "0", "3");
+
+    DummyMetadata metadata1 = new DummyMetadata(testTableName, segmentName1, 10);
+    DummyMetadata metadata2 = new DummyMetadata(testTableName, segmentName2, 20);
+    DummyMetadata metadata3 = new DummyMetadata(testTableName, segmentName3, 30);
+
+    // This should get ignored in the count as it belongs to a different group id
+    DummyMetadata metadata4 = new DummyMetadata(testTableName, segmentName4, 20);
+
+    // Add them to a list
+    List<SegmentMetadata> segmentMetadataList = new ArrayList<SegmentMetadata>();
+    segmentMetadataList.add(metadata1);
+    segmentMetadataList.add(metadata2);
+    segmentMetadataList.add(metadata3);
+    segmentMetadataList.add(metadata4);
+
+    Assert.assertEquals(ValidationManager.computeRealtimeTotalDocumentInSegments(segmentMetadataList), 60);
+
+  }
 
   @AfterTest
   public void shutDown() {
@@ -159,46 +185,63 @@ public class ValidationManagerTest {
         .getMillis(), new DateTime(2014, 1, 2, 22, 0).toInstant().getMillis(), }, TimeUnit.DAYS), 0);
 
     // Should be no missing segments on five consecutive days
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 2, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 22, 0)
-        .toInstant().getMillis(), new DateTime(2014, 1, 4, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 5, 22,
-        0).toInstant().getMillis(), }, TimeUnit.DAYS), 0);
+    Assert
+        .assertEquals(ValidationManager.countMissingSegments(
+            new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 2, 22, 0)
+                .toInstant()
+                .getMillis(), new DateTime(2014, 1, 3, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 22, 0)
+                    .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 0).toInstant().getMillis(), },
+        TimeUnit.DAYS), 0);
 
     // Should be no missing segments on five consecutive days, even if the interval between them isn't exactly 24 hours
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 2, 21, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 23, 0)
-        .toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5).toInstant().getMillis(), new DateTime(2014, 1, 5, 22,
-        15).toInstant().getMillis(), }, TimeUnit.DAYS), 0);
+    Assert
+        .assertEquals(ValidationManager.countMissingSegments(
+            new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 2, 21, 0)
+                .toInstant()
+                .getMillis(), new DateTime(2014, 1, 3, 23, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5)
+                    .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), },
+        TimeUnit.DAYS), 0);
 
     // Should be no missing segments on five consecutive days, even if there is a duplicate segment
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 2, 21, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 22, 0)
-        .toInstant().getMillis(), new DateTime(2014, 1, 3, 23, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21,
-        5).toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), }, TimeUnit.DAYS), 0);
+    Assert.assertEquals(ValidationManager.countMissingSegments(
+        new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 2, 21, 0)
+            .toInstant().getMillis(), new DateTime(2014, 1, 3, 22, 0).toInstant()
+                .getMillis(), new DateTime(2014, 1, 3, 23, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5)
+                    .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), },
+        TimeUnit.DAYS), 0);
 
     // Should be exactly one missing segment
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 2, 21, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5)
-        .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), }, TimeUnit.DAYS), 1);
+    Assert.assertEquals(
+        ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
+            .getMillis(), new DateTime(2014, 1, 2, 21, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5)
+                .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), },
+            TimeUnit.DAYS),
+        1);
 
     // Should be one missing segment, even if there is a duplicate segment
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 3, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 23, 0)
-        .toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5).toInstant().getMillis(), new DateTime(2014, 1, 5, 22,
-        15).toInstant().getMillis(), }, TimeUnit.DAYS), 1);
+    Assert
+        .assertEquals(ValidationManager.countMissingSegments(
+            new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 22, 0)
+                .toInstant()
+                .getMillis(), new DateTime(2014, 1, 3, 23, 0).toInstant().getMillis(), new DateTime(2014, 1, 4, 21, 5)
+                    .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), },
+        TimeUnit.DAYS), 1);
 
     // Should be two missing segments
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
-        .getMillis(), new DateTime(2014, 1, 3, 23, 0).toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15)
-        .toInstant().getMillis(), }, TimeUnit.DAYS), 2);
+    Assert
+        .assertEquals(
+            ValidationManager.countMissingSegments(
+                new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant().getMillis(), new DateTime(2014, 1, 3, 23, 0)
+                    .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), },
+        TimeUnit.DAYS), 2);
 
     // Should be three missing segments
     Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 0).toInstant()
         .getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), }, TimeUnit.DAYS), 3);
 
     // Should be three missing segments
-    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 25)
-        .toInstant().getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), }, TimeUnit.DAYS), 3);
+    Assert.assertEquals(ValidationManager.countMissingSegments(new long[] { new DateTime(2014, 1, 1, 22, 25).toInstant()
+        .getMillis(), new DateTime(2014, 1, 5, 22, 15).toInstant().getMillis(), }, TimeUnit.DAYS), 3);
   }
 
   @Test
@@ -282,6 +325,13 @@ public class ValidationManagerTest {
     public DummyMetadata(String resourceName, int totalDocsInSegment) {
       _resourceName = resourceName;
       _segmentName = resourceName + "_" + System.currentTimeMillis();
+      _crc = System.currentTimeMillis() + "";
+      _totalDocs = totalDocsInSegment;
+    }
+
+    public DummyMetadata(String resourceName, String segmentName, int totalDocsInSegment) {
+      _resourceName = resourceName;
+      _segmentName = segmentName;
       _crc = System.currentTimeMillis() + "";
       _totalDocs = totalDocsInSegment;
     }
@@ -384,6 +434,11 @@ public class ValidationManagerTest {
     @Override
     public boolean hasStarTree() {
       return false;
+    }
+
+    @Override
+    public StarTreeMetadata getStarTreeMetadata() {
+      return null;
     }
 
     @Override
