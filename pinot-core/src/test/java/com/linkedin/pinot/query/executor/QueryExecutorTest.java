@@ -16,6 +16,7 @@
 package com.linkedin.pinot.query.executor;
 
 import com.linkedin.pinot.common.metrics.ServerMetrics;
+import com.linkedin.pinot.core.data.manager.offline.TableDataManagerProvider;
 import com.yammer.metrics.core.MetricsRegistry;
 import com.linkedin.pinot.util.TestUtils;
 
@@ -67,6 +68,8 @@ public class QueryExecutorTest {
 
   @BeforeClass
   public void setup() throws Exception {
+    TableDataManagerProvider.setServerMetrics(new ServerMetrics(new MetricsRegistry()));
+
     File confDir = new File(QueryExecutorTest.class.getClassLoader().getResource("conf").toURI());
     setupSegmentList(2);
     // ServerBuilder serverBuilder = new ServerBuilder(confDir.getAbsolutePath());
@@ -95,6 +98,10 @@ public class QueryExecutorTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    for (IndexSegment segment : _indexSegmentList) {
+      segment.destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegmentList(int numberOfSegments) throws Exception {

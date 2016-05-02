@@ -15,36 +15,29 @@
  */
 package com.linkedin.pinot.core.segment.index.readers;
 
-import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.core.segment.index.ColumnMetadata;
-import java.io.File;
-import java.io.IOException;
-
-
-/**
- * Nov 14, 2014
- */
+import com.linkedin.pinot.core.segment.memory.PinotDataBuffer;
 
 public class LongDictionary extends ImmutableDictionaryReader {
 
-  public LongDictionary(File dictFile, ColumnMetadata metadata, ReadMode loadMode) throws IOException {
-    super(dictFile, metadata.getCardinality(), Long.SIZE / 8, loadMode == ReadMode.mmap);
+  public LongDictionary(PinotDataBuffer dataBuffer, ColumnMetadata metadata) {
+    super(dataBuffer, metadata.getCardinality(), Long.SIZE / 8);
   }
 
   @Override
   public int indexOf(Object rawValue) {
     Long lookup;
     if (rawValue instanceof String) {
-      lookup = new Long(Long.parseLong((String) rawValue));
+      lookup = Long.parseLong((String) rawValue);
     } else {
       lookup = (Long) rawValue;
     }
-    return longIndexOf(lookup.longValue());
+    return longIndexOf(lookup);
   }
 
   @Override
   public Long get(int dictionaryId) {
-    return new Long(getLong(dictionaryId));
+    return getLong(dictionaryId);
   }
 
   @Override
@@ -59,7 +52,7 @@ public class LongDictionary extends ImmutableDictionaryReader {
 
   @Override
   public String getStringValue(int dictionaryId) {
-    return new Long(getLong(dictionaryId)).toString();
+    return Long.toString(getLong(dictionaryId));
   }
 
   @Override
@@ -74,7 +67,7 @@ public class LongDictionary extends ImmutableDictionaryReader {
 
   @Override
   public String toString(int dictionaryId) {
-    return new Long(getLong(dictionaryId)).toString();
+    return Long.toString(getLong(dictionaryId));
   }
 
   private long getLong(int dictionaryId) {

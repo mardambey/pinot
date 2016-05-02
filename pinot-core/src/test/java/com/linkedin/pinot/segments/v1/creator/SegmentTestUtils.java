@@ -47,9 +47,12 @@ import com.linkedin.pinot.common.data.TimeGranularitySpec;
 import com.linkedin.pinot.core.data.readers.FileFormat;
 import com.linkedin.pinot.core.indexsegment.generator.SegmentGeneratorConfig;
 import com.linkedin.pinot.core.indexsegment.generator.SegmentVersion;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class SegmentTestUtils {
+  private static final Logger LOGGER = LoggerFactory.getLogger(SegmentTestUtils.class);
 
   public static SegmentGeneratorConfig getSegmentGenSpecWithSchemAndProjectedColumns(File inputAvro, File outputDir,
       String timeColumn, TimeUnit timeUnit, String tableName) throws FileNotFoundException,
@@ -58,11 +61,12 @@ public class SegmentTestUtils {
         new SegmentGeneratorConfig(extractSchemaFromAvroWithoutTime(inputAvro));
     segmentGenSpec.setInputFilePath(inputAvro.getAbsolutePath());
     segmentGenSpec.setTimeColumnName(timeColumn);
-    segmentGenSpec.setTimeUnitForSegment(timeUnit);
-    segmentGenSpec.setInputFileFormat(FileFormat.AVRO);
+    segmentGenSpec.setSegmentTimeUnit(timeUnit);
+    segmentGenSpec.setFormat(FileFormat.AVRO);
     segmentGenSpec.setSegmentVersion(SegmentVersion.v1);
     segmentGenSpec.setTableName(tableName);
-    segmentGenSpec.setIndexOutputDir(outputDir.getAbsolutePath());
+    segmentGenSpec.setOutDir(outputDir.getAbsolutePath());
+    segmentGenSpec.createInvertedIndexForAllColumns();
     return segmentGenSpec;
   }
 
@@ -88,7 +92,7 @@ public class SegmentTestUtils {
         final TimeGranularitySpec gSpec =
             new TimeGranularitySpec(getColumnType(dataStream.getSchema().getField(columnName)), granularity, field.name());
         final TimeFieldSpec fSpec = new TimeFieldSpec(gSpec);
-        schema.addSchema(columnName, fSpec);
+        schema.addField(columnName, fSpec);
       } else if (fieldTypeMap.get(field.name()) == FieldType.DIMENSION) {
         final FieldSpec fieldSpec = new DimensionFieldSpec();
         fieldSpec.setName(columnName);
@@ -96,7 +100,7 @@ public class SegmentTestUtils {
         fieldSpec.setDataType(getColumnType(dataStream.getSchema().getField(columnName)));
         fieldSpec.setSingleValueField(isSingleValueField(dataStream.getSchema().getField(columnName)));
         fieldSpec.setDelimiter(",");
-        schema.addSchema(columnName, fieldSpec);
+        schema.addField(columnName, fieldSpec);
       } else {
         final FieldSpec fieldSpec = new MetricFieldSpec();
         fieldSpec.setName(columnName);
@@ -104,7 +108,7 @@ public class SegmentTestUtils {
         fieldSpec.setDataType(getColumnType(dataStream.getSchema().getField(columnName)));
         fieldSpec.setSingleValueField(isSingleValueField(dataStream.getSchema().getField(columnName)));
         fieldSpec.setDelimiter(",");
-        schema.addSchema(columnName, fieldSpec);
+        schema.addField(columnName, fieldSpec);
       }
     }
 
@@ -118,6 +122,13 @@ public class SegmentTestUtils {
     Schema schema = new Schema();
 
     for (final Field field : dataStream.getSchema().getFields()) {
+      try {
+        getColumnType(field);
+      } catch (Exception e) {
+        LOGGER.warn("Caught exception while converting Avro field {} of type {}, field will not be in schema.",
+            field.name(), field.schema().getType());
+        continue;
+      }
       final String columnName = field.name();
       final String pinotType = field.getProp("pinotType");
 
@@ -134,7 +145,7 @@ public class SegmentTestUtils {
       fieldSpec.setDataType(getColumnType(dataStream.getSchema().getField(columnName)));
       fieldSpec.setSingleValueField(isSingleValueField(dataStream.getSchema().getField(columnName)));
       fieldSpec.setDelimiter(",");
-      schema.addSchema(columnName, fieldSpec);
+      schema.addField(columnName, fieldSpec);
     }
 
     dataStream.close();

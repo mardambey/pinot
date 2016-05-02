@@ -15,30 +15,25 @@
  */
 package com.linkedin.pinot.core.plan;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.core.common.Operator;
 import com.linkedin.pinot.core.indexsegment.IndexSegment;
 import com.linkedin.pinot.core.operator.MProjectionOperator;
-import com.linkedin.pinot.core.operator.query.BAggregationFunctionOperator;
-import com.linkedin.pinot.core.operator.query.MAggregationOperator;
+import com.linkedin.pinot.core.operator.aggregation.AggregationOperator;
 import com.linkedin.pinot.core.query.aggregation.AggregationFunctionUtils;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
-/**
- * AggregationPlanNode takes care of how to apply an aggregation query to an IndexSegment.
- */
 public class AggregationPlanNode implements PlanNode {
   private static final Logger LOGGER = LoggerFactory.getLogger("QueryPlanLog");
+
   private final IndexSegment _indexSegment;
   private final BrokerRequest _brokerRequest;
   private final List<AggregationFunctionPlanNode> _aggregationFunctionPlanNodes =
@@ -48,11 +43,11 @@ public class AggregationPlanNode implements PlanNode {
   public AggregationPlanNode(IndexSegment indexSegment, BrokerRequest query) {
     _indexSegment = indexSegment;
     _brokerRequest = query;
-    _projectionPlanNode =
-        new ProjectionPlanNode(_indexSegment, getAggregationRelatedColumns(), new DocIdSetPlanNode(_indexSegment,
-            _brokerRequest, 5000));
+    _projectionPlanNode = new ProjectionPlanNode(_indexSegment, getAggregationRelatedColumns(),
+        new DocIdSetPlanNode(_indexSegment, _brokerRequest));
     for (int i = 0; i < _brokerRequest.getAggregationsInfo().size(); ++i) {
       AggregationInfo aggregationInfo = _brokerRequest.getAggregationsInfo().get(i);
+      AggregationFunctionUtils.ensureAggregationColumnsAreSingleValued(aggregationInfo, _indexSegment);
       boolean hasDictionary = AggregationFunctionUtils.isAggregationFunctionWithDictionary(aggregationInfo, _indexSegment);
       _aggregationFunctionPlanNodes.add(new AggregationFunctionPlanNode(aggregationInfo, _projectionPlanNode, hasDictionary));
     }
@@ -71,12 +66,8 @@ public class AggregationPlanNode implements PlanNode {
 
   @Override
   public Operator run() {
-    List<BAggregationFunctionOperator> aggregationFunctionOperatorList = new ArrayList<BAggregationFunctionOperator>();
-    for (AggregationFunctionPlanNode aggregationFunctionPlanNode : _aggregationFunctionPlanNodes) {
-      aggregationFunctionOperatorList.add((BAggregationFunctionOperator) aggregationFunctionPlanNode.run());
-    }
-    return new MAggregationOperator(_indexSegment, _brokerRequest.getAggregationsInfo(),
-        (MProjectionOperator) _projectionPlanNode.run(), aggregationFunctionOperatorList);
+    MProjectionOperator projectionOperator = (MProjectionOperator) _projectionPlanNode.run();
+    return new AggregationOperator(_indexSegment, _brokerRequest.getAggregationsInfo(), projectionOperator);
   }
 
   @Override
@@ -92,4 +83,22 @@ public class AggregationPlanNode implements PlanNode {
 
   }
 
+  /**
+   * Returns true AggregationGroupByPlanNode can serve the given BrokerRequest, false otherwise.
+   * - Only 'sum', 'min', 'max' & 'avg' aggregation functions are supported currently.
+   *
+   * @param brokerRequest
+   * @return
+   */
+  public static boolean isFitForAggregationFastAggregation(BrokerRequest brokerRequest) {
+    for (AggregationInfo aggregationInfo : brokerRequest.getAggregationsInfo()) {
+      String aggregationType = aggregationInfo.getAggregationType();
+
+      if (aggregationType.equalsIgnoreCase("sum") || aggregationType.equalsIgnoreCase("min") ||
+          aggregationType.equalsIgnoreCase("max") || aggregationType.equals("avg")) {
+        return true;
+      }
+    }
+    return false;
+  }
 }

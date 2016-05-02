@@ -19,16 +19,22 @@ import com.linkedin.pinot.common.Utils;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.avro.util.WeakIdentityHashMap;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,12 +52,12 @@ public class MmapUtils {
   private static final Map<ByteBuffer, AllocationContext> BUFFER_TO_CONTEXT_MAP =
       Collections.synchronizedMap(new WeakIdentityHashMap<ByteBuffer, AllocationContext>());
 
-  private enum AllocationType {
+  public enum AllocationType {
     MMAP,
     DIRECT_BYTE_BUFFER
   }
 
-  private static class AllocationContext {
+  public static class AllocationContext {
     private final String context;
     private final AllocationType allocationType;
 
@@ -62,6 +68,10 @@ public class MmapUtils {
 
     public String getContext() {
       return context;
+    }
+
+    public AllocationType getAllocationType() {
+      return allocationType;
     }
 
     @Override
@@ -121,7 +131,26 @@ public class MmapUtils {
           }
           BUFFER_TO_CONTEXT_MAP.remove(buffer);
         } else {
-          LOGGER.warn("Attempted to release byte buffer of size {} with no context", bufferSize);
+          LOGGER.warn("Attempted to release byte buffer of size {} with no context, no deallocation performed.", bufferSize);
+          if (LOGGER.isDebugEnabled()) {
+            List<String> matchingAllocationContexts = new ArrayList<>();
+
+            synchronized (BUFFER_TO_CONTEXT_MAP) {
+              clearSynchronizedMapEntrySetCache();
+
+              for (Map.Entry<ByteBuffer, AllocationContext> byteBufferAllocationContextEntry : BUFFER_TO_CONTEXT_MAP.entrySet()) {
+                if (byteBufferAllocationContextEntry.getKey().capacity() == bufferSize) {
+                  matchingAllocationContexts.add(byteBufferAllocationContextEntry.getValue().toString());
+                }
+              }
+
+              // Clear the entry set cache afterwards so that we don't hang on to stale entries
+              clearSynchronizedMapEntrySetCache();
+            }
+
+            LOGGER.debug("Contexts with a size of {}: {}", bufferSize, matchingAllocationContexts);
+            LOGGER.debug("Called by: {}", Utils.getCallingMethodDetails());
+          }
         }
       }
     } catch (Exception e) {
@@ -238,5 +267,42 @@ public class MmapUtils {
    */
   public static long getMmapBufferCount() {
     return MMAP_BUFFER_COUNT.get();
+  }
+
+  private static void clearSynchronizedMapEntrySetCache() {
+    // For some bizarre reason, Collections.synchronizedMap's implementation (at least on JDK 1.8.0.25) caches the
+    // entry set, and will thus return stale (and incorrect) values if queried multiple times, as well as cause those
+    // entries to not be garbage-collectable. This clears its cache.
+    try {
+      Class<?> clazz = BUFFER_TO_CONTEXT_MAP.getClass();
+      Field field = clazz.getDeclaredField("entrySet");
+      field.setAccessible(true);
+      field.set(BUFFER_TO_CONTEXT_MAP, null);
+    } catch (Exception e) {
+      // Well, that didn't work.
+    }
+  }
+
+  /**
+   * Obtains the list of all allocations and their associated sizes. Only meant for debugging purposes.
+   */
+  public static List<Pair<AllocationContext, Integer>> getAllocationsAndSizes() {
+    List<Pair<AllocationContext, Integer>> returnValue = new ArrayList<Pair<AllocationContext, Integer>>();
+
+    synchronized (BUFFER_TO_CONTEXT_MAP) {
+      clearSynchronizedMapEntrySetCache();
+
+      Set<Map.Entry<ByteBuffer, AllocationContext>> entries = BUFFER_TO_CONTEXT_MAP.entrySet();
+
+      // Clear the entry set cache afterwards so that we don't hang on to stale entries
+      clearSynchronizedMapEntrySetCache();
+
+      for (Map.Entry<ByteBuffer, AllocationContext> bufferAndContext : entries) {
+        returnValue.add(new ImmutablePair<AllocationContext, Integer>(bufferAndContext.getValue(),
+            bufferAndContext.getKey().capacity()));
+      }
+    }
+
+    return returnValue;
   }
 }

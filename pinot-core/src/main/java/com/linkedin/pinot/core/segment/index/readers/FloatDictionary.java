@@ -15,15 +15,13 @@
  */
 package com.linkedin.pinot.core.segment.index.readers;
 
-import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.core.segment.index.ColumnMetadata;
-import java.io.File;
-import java.io.IOException;
+import com.linkedin.pinot.core.segment.memory.PinotDataBuffer;
 
 public class FloatDictionary extends ImmutableDictionaryReader {
 
-  public FloatDictionary(File dictFile, ColumnMetadata metadata, ReadMode loadMode) throws IOException {
-    super(dictFile, metadata.getCardinality(), Float.SIZE / 8, loadMode == ReadMode.mmap);
+  public FloatDictionary(PinotDataBuffer dataBuffer, ColumnMetadata metadata) {
+    super(dataBuffer, metadata.getCardinality(), Float.SIZE / 8);
   }
 
   @Override
@@ -31,16 +29,16 @@ public class FloatDictionary extends ImmutableDictionaryReader {
     Float lookup ;
 
     if (rawValue instanceof String) {
-      lookup = new Float(Float.parseFloat((String)rawValue));
+      lookup = Float.parseFloat((String) rawValue);
     } else {
       lookup = (Float) rawValue;
     }
-    return floatIndexOf(lookup.floatValue());
+    return floatIndexOf(lookup);
   }
 
   @Override
   public Float get(int dictionaryId) {
-    return new Float(getFloat(dictionaryId));
+    return getFloat(dictionaryId);
   }
 
   @Override
@@ -55,12 +53,12 @@ public class FloatDictionary extends ImmutableDictionaryReader {
 
   @Override
   public String toString(int dictionaryId) {
-    return new Float(getFloat(dictionaryId)).toString();
+    return Float.toString(getFloat(dictionaryId));
   }
 
   @Override
   public String getStringValue(int dictionaryId) {
-    return new Float(getFloat(dictionaryId)).toString();
+    return Float.toString(getFloat(dictionaryId));
   }
 
   @Override
@@ -77,6 +75,6 @@ public class FloatDictionary extends ImmutableDictionaryReader {
     return dataFileReader.getFloat(dictionaryId, 0);
   }
 
-  
+
 
 }

@@ -15,59 +15,34 @@
  */
 package com.linkedin.pinot.core.segment.creator.impl;
 
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.BITS_PER_ELEMENT;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.CARDINALITY;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.COLUMN_TYPE;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.DATA_TYPE;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.DICTIONARY_ELEMENT_SIZE;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.HAS_INVERTED_INDEX;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.HAS_NULL_VALUE;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.IS_SINGLE_VALUED;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.IS_SORTED;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.MAX_MULTI_VALUE_ELEMTS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.TOTAL_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.TOTAL_RAW_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.TOTAL_AGG_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.TOTAL_NUMBER_OF_ENTRIES;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.DIMENSIONS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.METRICS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.TABLE_NAME;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_END_TIME;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_NAME;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_START_TIME;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_TOTAL_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_TOTAL_AGGREGATE_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.SEGMENT_TOTAL_RAW_DOCS;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.TIME_COLUMN_NAME;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.TIME_INTERVAL;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.TIME_UNIT;
-import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.StarTree.STAR_TREE_ENABLED;
-
+import com.linkedin.pinot.common.data.FieldSpec;
+import com.linkedin.pinot.common.data.Schema;
+import com.linkedin.pinot.common.data.StarTreeIndexSpec;
+import com.linkedin.pinot.core.data.GenericRow;
+import com.linkedin.pinot.core.indexsegment.generator.SegmentGeneratorConfig;
+import com.linkedin.pinot.core.segment.creator.ColumnIndexCreationInfo;
+import com.linkedin.pinot.core.segment.creator.ForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.InvertedIndexCreator;
+import com.linkedin.pinot.core.segment.creator.MultiValueForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.SegmentCreator;
+import com.linkedin.pinot.core.segment.creator.SegmentIndexCreationInfo;
+import com.linkedin.pinot.core.segment.creator.SingleValueForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.impl.fwd.MultiValueUnsortedForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.impl.fwd.SingleValueSortedForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.impl.fwd.SingleValueUnsortedForwardIndexCreator;
+import com.linkedin.pinot.core.segment.creator.impl.inv.OffHeapBitmapInvertedIndexCreator;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-
 import org.apache.commons.configuration.ConfigurationException;
 import org.apache.commons.configuration.PropertiesConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.linkedin.pinot.common.data.FieldSpec;
-import com.linkedin.pinot.common.data.Schema;
-import com.linkedin.pinot.core.data.GenericRow;
-import com.linkedin.pinot.core.indexsegment.generator.SegmentGeneratorConfig;
-import com.linkedin.pinot.core.segment.creator.ColumnIndexCreationInfo;
-import com.linkedin.pinot.core.segment.creator.ForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.MultiValueForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.SingleValueForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.InvertedIndexCreator;
-import com.linkedin.pinot.core.segment.creator.SegmentCreator;
-import com.linkedin.pinot.core.segment.creator.SegmentIndexCreationInfo;
-import com.linkedin.pinot.core.segment.creator.impl.fwd.MultiValueUnsortedForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.impl.fwd.SingleValueSortedForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.impl.fwd.SingleValueUnsortedForwardIndexCreator;
-import com.linkedin.pinot.core.segment.creator.impl.inv.OffHeapBitmapInvertedIndexCreator;
+import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Column.*;
+import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.*;
+import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.StarTree.*;
 
 
 /**
@@ -119,7 +94,7 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
     this.totalDocs = segmentIndexCreationInfo.getTotalDocs();
     this.totalAggDocs = segmentIndexCreationInfo.getTotalAggDocs();
     this.totalRawDocs = segmentIndexCreationInfo.getTotalRawDocs();
-    
+
     // Initialize and build dictionaries
     for (final FieldSpec spec : schema.getAllFieldSpecs()) {
       final ColumnIndexCreationInfo info = indexCreationInfoMap.get(spec.getName());
@@ -154,7 +129,7 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
     }
 
     for (String column : config.getInvertedIndexCreationColumns()) {
-      if (!schema.isExisted(column)) {
+      if (!schema.hasColumn(column)) {
         LOGGER.warn("Skipping enabling index on column:{} since its missing in schema", column);
         continue;
       }
@@ -169,27 +144,30 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
   @Override
   public void indexRow(GenericRow row) {
     for (final String column : dictionaryCreatorMap.keySet()) {
-
-      Object columnValueToIndex = row.getValue(column);
-      if(columnValueToIndex == null){
-        throw new RuntimeException("Null value for column:"+ column);
-      }
-      if (schema.getFieldSpecFor(column).isSingleValueField()) {
-        int dictionaryIndex = dictionaryCreatorMap.get(column).indexOfSV(columnValueToIndex);
-        ((SingleValueForwardIndexCreator) forwardIndexCreatorMap.get(column)).index(docIdCounter, dictionaryIndex);
-
-        // TODO : {refactor inverted index addition}
-        if (invertedIndexCreatorMap.containsKey(column)) {
-          invertedIndexCreatorMap.get(column).add(docIdCounter, dictionaryIndex);
+      try {
+        Object columnValueToIndex = row.getValue(column);
+        if (columnValueToIndex == null) {
+          throw new RuntimeException("Null value for column:" + column);
         }
-      } else {
-        int[] dictionaryIndex = dictionaryCreatorMap.get(column).indexOfMV(columnValueToIndex);
-        ((MultiValueForwardIndexCreator) forwardIndexCreatorMap.get(column)).index(docIdCounter, dictionaryIndex);
+        if (schema.getFieldSpecFor(column).isSingleValueField()) {
+          int dictionaryIndex = dictionaryCreatorMap.get(column).indexOfSV(columnValueToIndex);
+          ((SingleValueForwardIndexCreator) forwardIndexCreatorMap.get(column)).index(docIdCounter, dictionaryIndex);
 
-        // TODO : {refactor inverted index addition}
-        if (invertedIndexCreatorMap.containsKey(column)) {
-          invertedIndexCreatorMap.get(column).add(docIdCounter, dictionaryIndex);
+          // TODO : {refactor inverted index addition}
+          if (invertedIndexCreatorMap.containsKey(column)) {
+            invertedIndexCreatorMap.get(column).add(docIdCounter, dictionaryIndex);
+          }
+        } else {
+          int[] dictionaryIndex = dictionaryCreatorMap.get(column).indexOfMV(columnValueToIndex);
+          ((MultiValueForwardIndexCreator) forwardIndexCreatorMap.get(column)).index(docIdCounter, dictionaryIndex);
+
+          // TODO : {refactor inverted index addition}
+          if (invertedIndexCreatorMap.containsKey(column)) {
+            invertedIndexCreatorMap.get(column).add(docIdCounter, dictionaryIndex);
+          }
         }
+      } catch (Exception e) {
+        throw new RuntimeException("Exception while indexing column:"+ column, e);
       }
     }
     docIdCounter++;
@@ -227,26 +205,39 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
     properties.setProperty(SEGMENT_TOTAL_RAW_DOCS, String.valueOf(totalRawDocs));
     properties.setProperty(SEGMENT_TOTAL_AGGREGATE_DOCS, String.valueOf(totalAggDocs));
     properties.setProperty(SEGMENT_TOTAL_DOCS, String.valueOf(totalDocs));
-    properties.setProperty(STAR_TREE_ENABLED, String.valueOf(config.isCreateStarTreeIndex()));
+    properties.setProperty(STAR_TREE_ENABLED, String.valueOf(config.isEnableStarTreeIndex()));
     String timeColumn = config.getTimeColumnName();
+
+    StarTreeIndexSpec starTreeIndexSpec = config.getStarTreeIndexSpec();
+    if (starTreeIndexSpec != null) {
+      properties.setProperty(STAR_TREE_SPLIT_ORDER, starTreeIndexSpec.getDimensionsSplitOrder());
+      properties.setProperty(STAR_TREE_MAX_LEAF_RECORDS, starTreeIndexSpec.getMaxLeafRecords());
+      properties.setProperty(STAR_TREE_SKIP_STAR_NODE_CREATION_FOR_DIMENSIONS,
+          starTreeIndexSpec.getSkipStarNodeCreationForDimensions());
+      properties.setProperty(STAR_TREE_SKIP_MATERIALIZATION_CARDINALITY,
+          starTreeIndexSpec.getskipMaterializationCardinalityThreshold());
+      properties.setProperty(STAR_TREE_SKIP_MATERIALIZATION_FOR_DIMENSIONS,
+          starTreeIndexSpec.getskipMaterializationForDimensions());
+    }
+
     if (indexCreationInfoMap.get(timeColumn) != null) {
       properties.setProperty(SEGMENT_START_TIME, indexCreationInfoMap.get(timeColumn).getMin());
       properties.setProperty(SEGMENT_END_TIME, indexCreationInfoMap.get(timeColumn).getMax());
-      properties.setProperty(TIME_UNIT, config.getTimeUnitForSegment());
+      properties.setProperty(TIME_UNIT, config.getSegmentTimeUnit());
     }
 
-    if (config.containsCustomPropertyWithKey(SEGMENT_START_TIME)) {
+    if (config.containsCustomProperty(SEGMENT_START_TIME)) {
       properties.setProperty(SEGMENT_START_TIME, config.getStartTime());
     }
-    if (config.containsCustomPropertyWithKey(SEGMENT_END_TIME)) {
+    if (config.containsCustomProperty(SEGMENT_END_TIME)) {
       properties.setProperty(SEGMENT_END_TIME, config.getEndTime());
     }
-    if (config.containsCustomPropertyWithKey(TIME_UNIT)) {
-      properties.setProperty(TIME_UNIT, config.getTimeUnitForSegment());
+    if (config.containsCustomProperty(TIME_UNIT)) {
+      properties.setProperty(TIME_UNIT, config.getSegmentTimeUnit());
     }
 
-    for (final String key : config.getAllCustomKeyValuePair().keySet()) {
-      properties.setProperty(key, config.getAllCustomKeyValuePair().get(key));
+    for (final String key : config.getCustomProperties().keySet()) {
+      properties.setProperty(key, config.getCustomProperties().get(key));
     }
 
     for (final String column : indexCreationInfoMap.keySet()) {
@@ -255,8 +246,10 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, CARDINALITY),
           String.valueOf(uniqueValueCount));
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, TOTAL_DOCS), String.valueOf(totalDocs));
-      properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, TOTAL_RAW_DOCS), String.valueOf(totalRawDocs));
-      properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, TOTAL_AGG_DOCS), String.valueOf(totalAggDocs));
+      properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, TOTAL_RAW_DOCS),
+          String.valueOf(totalRawDocs));
+      properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, TOTAL_AGG_DOCS),
+          String.valueOf(totalAggDocs));
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, DATA_TYPE),
           schema.getFieldSpecFor(column).getDataType().toString());
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, BITS_PER_ELEMENT),
@@ -278,7 +271,7 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
           String.valueOf(columnIndexCreationInfo.isCreateDictionary()));
 
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, HAS_INVERTED_INDEX),
-          String.valueOf(true));
+          String.valueOf(config.getInvertedIndexCreationColumns().contains(column)));
 
       properties.setProperty(V1Constants.MetadataKeys.Column.getKeyFor(column, IS_SINGLE_VALUED),
           String.valueOf(schema.getFieldSpecFor(column).isSingleValueField()));

@@ -79,6 +79,26 @@ public class FlowControlledThirdEyeClient implements ThirdEyeClient {
   }
 
   @Override
+  public long getExpectedTimeBuckets(ThirdEyeRequest request) throws Exception {
+    requestPermits.acquireUninterruptibly();
+    try {
+      return client.getExpectedTimeBuckets(request);
+    } finally {
+      requestPermits.release();
+    }
+  }
+
+  @Override
+  public List<String> getExpectedTimestamps(ThirdEyeRequest request) throws Exception {
+    requestPermits.acquireUninterruptibly();
+    try {
+      return client.getExpectedTimestamps(request);
+    } finally {
+      requestPermits.release();
+    }
+  }
+
+  @Override
   public void clear() throws Exception {
     client.clear();
   }

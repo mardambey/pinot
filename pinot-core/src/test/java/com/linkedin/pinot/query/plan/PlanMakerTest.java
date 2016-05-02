@@ -41,7 +41,7 @@ import com.linkedin.pinot.common.request.FilterOperator;
 import com.linkedin.pinot.common.request.GroupBy;
 import com.linkedin.pinot.common.request.Selection;
 import com.linkedin.pinot.common.request.SelectionSort;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -60,7 +60,6 @@ import com.linkedin.pinot.core.operator.query.MSelectionOnlyOperator;
 import com.linkedin.pinot.core.operator.query.MSelectionOrderByOperator;
 import com.linkedin.pinot.core.plan.Plan;
 import com.linkedin.pinot.core.plan.PlanNode;
-import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV1;
 import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import com.linkedin.pinot.core.plan.maker.PlanMaker;
 import com.linkedin.pinot.core.query.aggregation.groupby.AggregationGroupByOperatorService;
@@ -93,16 +92,25 @@ public class PlanMakerTest {
     } catch (Exception e) {
       e.printStackTrace();
     }
+
   }
 
   @AfterClass
   public void tearDown() {
+    if (_indexSegment != null) {
+      _indexSegment.destroy();
+    }
+    for (IndexSegment segment : _indexSegmentList) {
+      segment.destroy();
+    }
+    _indexSegmentList.clear();
     if (INDEX_DIR.exists()) {
       FileUtils.deleteQuietly(INDEX_DIR);
     }
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+
   }
 
   private void setupSegment() throws Exception {
@@ -417,13 +425,13 @@ public class PlanMakerTest {
     DefaultReduceService reduceService = new DefaultReduceService();
     Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse);
-    BrokerResponse brokerResponse = reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    BrokerResponseJSON brokerResponse = reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     System.out.println(brokerResponse.getAggregationResults());
   }
 
   @Test
   public void testInterSegmentAggregationGroupByPlanMakerAndRun() {
-    PlanMaker instancePlanMaker = new InstancePlanMakerImplV1();
+    PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     BrokerRequest brokerRequest = getAggregationGroupByNoFilterBrokerRequest();
     ExecutorService executorService = Executors.newCachedThreadPool(new NamedThreadFactory("test-plan-maker"));
     Plan globalPlan = instancePlanMaker.makeInterSegmentPlan(makeSegMgrList(_indexSegmentList), brokerRequest, executorService, 150000);
@@ -540,7 +548,7 @@ public class PlanMakerTest {
     DefaultReduceService defaultReduceService = new DefaultReduceService();
     Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
-    BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     System.out.println(new JSONArray(brokerResponse.getAggregationResults()));
     System.out.println("Time used : " + brokerResponse.getTimeUsedMs());
 
@@ -570,7 +578,7 @@ public class PlanMakerTest {
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
     instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse);
 
-    BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     System.out.println(brokerResponse.getSelectionResults());
     System.out.println("TimeUsedMs : " + brokerResponse.getTimeUsedMs());
     System.out.println(brokerResponse);
@@ -609,7 +617,7 @@ public class PlanMakerTest {
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
     instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse);
 
-    BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     System.out.println(brokerResponse.getSelectionResults());
     System.out.println("TimeUsedMs : " + brokerResponse.getTimeUsedMs());
     System.out.println(brokerResponse);

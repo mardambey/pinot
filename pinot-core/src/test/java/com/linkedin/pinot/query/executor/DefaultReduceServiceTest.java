@@ -17,6 +17,7 @@ package com.linkedin.pinot.query.executor;
 
 import com.linkedin.pinot.common.metrics.ServerMetrics;
 import com.linkedin.pinot.common.utils.JsonAssert;
+import com.linkedin.pinot.core.data.manager.offline.TableDataManagerProvider;
 import com.yammer.metrics.core.MetricsRegistry;
 import com.linkedin.pinot.util.TestUtils;
 
@@ -38,10 +39,9 @@ import org.testng.annotations.Test;
 import com.linkedin.pinot.common.query.ReduceService;
 import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.BrokerRequest;
-import com.linkedin.pinot.common.request.FilterQuery;
 import com.linkedin.pinot.common.request.InstanceRequest;
 import com.linkedin.pinot.common.request.QuerySource;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -68,10 +68,12 @@ public class DefaultReduceServiceTest {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(DefaultReduceServiceTest.class);
   public static final String PINOT_PROPERTIES = "pinot.properties";
-  private static ReduceService _reduceService = new DefaultReduceService();
+  private static ReduceService<BrokerResponseJSON> _reduceService = new DefaultReduceService();
 
   @BeforeClass
   public void setup() throws Exception {
+    TableDataManagerProvider.setServerMetrics(new ServerMetrics(new MetricsRegistry()));
+
     File confDir = new File(QueryExecutorTest.class.getClassLoader().getResource("conf").toURI());
     setupSegmentList(2);
     FileUtils.deleteDirectory(new File("/tmp/pinot/test1"));
@@ -99,6 +101,10 @@ public class DefaultReduceServiceTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    for (IndexSegment segment : _indexSegmentList) {
+      segment.destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegmentList(int numberOfSegments) throws Exception {
@@ -149,7 +155,7 @@ public class DefaultReduceServiceTest {
       instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse1);
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"800004\",\"function\":\"count_star\"}");
@@ -182,7 +188,7 @@ public class DefaultReduceServiceTest {
       instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse1);
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"80000400000.00000\",\"function\":\"sum_met\"}");
@@ -215,7 +221,7 @@ public class DefaultReduceServiceTest {
       instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse1);
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"200000.00000\",\"function\":\"max_met\"}");
@@ -247,7 +253,7 @@ public class DefaultReduceServiceTest {
       instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse1);
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"0.00000\",\"function\":\"min_met\"}");
@@ -280,7 +286,7 @@ public class DefaultReduceServiceTest {
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
 
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"100000.00000\",\"function\":\"avg_met\"}");
@@ -313,7 +319,7 @@ public class DefaultReduceServiceTest {
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
 
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"10\",\"function\":\"distinctCount_dim0\"}");
@@ -346,7 +352,7 @@ public class DefaultReduceServiceTest {
       DataTable instanceResponse2 = _queryExecutor.processQuery(instanceRequest);
       instanceResponseMap.put(new ServerInstance("localhost:1111"), instanceResponse2);
 
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"100\",\"function\":\"distinctCount_dim1\"}");
@@ -384,7 +390,7 @@ public class DefaultReduceServiceTest {
       instanceResponseMap.put(new ServerInstance("localhost:7777"), _queryExecutor.processQuery(instanceRequest));
       instanceResponseMap.put(new ServerInstance("localhost:8888"), _queryExecutor.processQuery(instanceRequest));
       instanceResponseMap.put(new ServerInstance("localhost:9999"), _queryExecutor.processQuery(instanceRequest));
-      BrokerResponse brokerResponse = _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+      BrokerResponseJSON brokerResponse = (BrokerResponseJSON) _reduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
       LOGGER.info("BrokerResponse is " + brokerResponse.getAggregationResults().get(0));
       JsonAssert.assertEqualsIgnoreOrder(brokerResponse.getAggregationResults().get(0).toString(),
           "{\"value\":\"4000020\",\"function\":\"count_star\"}");

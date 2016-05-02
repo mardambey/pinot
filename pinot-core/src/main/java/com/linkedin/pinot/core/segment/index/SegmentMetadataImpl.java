@@ -15,15 +15,28 @@
  */
 package com.linkedin.pinot.core.segment.index;
 
+import com.linkedin.pinot.common.data.Schema;
+import com.linkedin.pinot.common.metadata.segment.OfflineSegmentZKMetadata;
+import com.linkedin.pinot.common.metadata.segment.RealtimeSegmentZKMetadata;
+import com.linkedin.pinot.common.segment.SegmentMetadata;
+import com.linkedin.pinot.common.segment.StarTreeMetadata;
 import com.linkedin.pinot.common.utils.time.TimeUtils;
+import com.linkedin.pinot.core.indexsegment.IndexType;
+import com.linkedin.pinot.core.indexsegment.generator.SegmentVersion;
+import com.linkedin.pinot.core.segment.creator.impl.V1Constants;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.commons.configuration.ConfigurationException;
 import org.apache.commons.configuration.PropertiesConfiguration;
 import org.joda.time.Duration;
@@ -31,24 +44,10 @@ import org.joda.time.Interval;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.linkedin.pinot.common.data.FieldSpec.DataType;
-import com.linkedin.pinot.common.data.FieldSpec.FieldType;
-import com.linkedin.pinot.common.data.Schema;
-import com.linkedin.pinot.common.metadata.segment.OfflineSegmentZKMetadata;
-import com.linkedin.pinot.common.metadata.segment.RealtimeSegmentZKMetadata;
-import com.linkedin.pinot.common.segment.SegmentMetadata;
-import com.linkedin.pinot.core.indexsegment.IndexType;
-import com.linkedin.pinot.core.indexsegment.generator.SegmentVersion;
-import com.linkedin.pinot.core.segment.creator.impl.V1Constants;
-
 import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys;
 import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment;
 import static com.linkedin.pinot.core.segment.creator.impl.V1Constants.MetadataKeys.Segment.TIME_UNIT;
 
-
-/**
- * Nov 12, 2014
- */
 
 public class SegmentMetadataImpl implements SegmentMetadata {
 
@@ -69,6 +68,7 @@ public class SegmentMetadataImpl implements SegmentMetadata {
   private long _refreshTime = Long.MIN_VALUE;
   private SegmentVersion _segmentVersion;
   private boolean _hasStarTree;
+  private StarTreeMetadata _starTreeMetadata = null;
 
   public SegmentMetadataImpl(File indexDir) throws ConfigurationException, IOException {
     LOGGER.debug("SegmentMetadata location: {}", indexDir);
@@ -85,7 +85,7 @@ public class SegmentMetadataImpl implements SegmentMetadata {
     init();
     loadCreationMeta(new File(indexDir, V1Constants.SEGMENT_CREATION_META));
     setTimeIntervalAndGranularity();
-    LOGGER.info("loaded metadata for {}", indexDir.getName());
+    LOGGER.debug("loaded metadata for {}", indexDir.getName());
   }
 
   public SegmentMetadataImpl(OfflineSegmentZKMetadata offlineSegmentZKMetadata) {
@@ -161,7 +161,7 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
   private void setSchema(Schema schema) {
     for (String columnName : schema.getColumnNames()) {
-      _schema.addSchema(columnName, schema.getFieldSpecFor(columnName));
+      _schema.addField(columnName, schema.getFieldSpecFor(columnName));
     }
   }
 
@@ -203,7 +203,7 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
   private void init() {
     String versionString = _segmentMetadataPropertiesConfiguration
-        .getString(V1Constants.MetadataKeys.Segment.SEGMENT_VERSION.toString(), SegmentVersion.v1.toString());
+        .getString(V1Constants.MetadataKeys.Segment.SEGMENT_VERSION, SegmentVersion.v1.toString());
     _segmentVersion = SegmentVersion.valueOf(versionString);
 
     final Iterator<String> metrics =
@@ -244,6 +244,9 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
     // StarTree config here
     _hasStarTree = _segmentMetadataPropertiesConfiguration.getBoolean(MetadataKeys.StarTree.STAR_TREE_ENABLED, false);
+    if (_hasStarTree) {
+      initStarTreeMetadata();
+    }
 
     _segmentName = _segmentMetadataPropertiesConfiguration.getString(V1Constants.MetadataKeys.Segment.SEGMENT_NAME);
 
@@ -256,57 +259,60 @@ public class SegmentMetadataImpl implements SegmentMetadata {
     }
   }
 
-  private ColumnMetadata extractColumnMetadataFor(String column) {
-    final int cardinality = _segmentMetadataPropertiesConfiguration
-        .getInt(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.CARDINALITY));
-    final int totalDocs = _segmentMetadataPropertiesConfiguration
-        .getInt(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.TOTAL_DOCS));
-    final int totalRawDocs = _segmentMetadataPropertiesConfiguration.getInt(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.TOTAL_RAW_DOCS), totalDocs);
-    final int totalAggDocs = _segmentMetadataPropertiesConfiguration
-        .getInt(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.TOTAL_AGG_DOCS), 0);
+  /**
+   * Reads and initializes the star tree metadata from segment metadata properties.
+   */
+  private void initStarTreeMetadata() {
+    _starTreeMetadata = new StarTreeMetadata();
 
-    final DataType dataType = DataType.valueOf(_segmentMetadataPropertiesConfiguration
-        .getString(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.DATA_TYPE)));
-    final int bitsPerElement = _segmentMetadataPropertiesConfiguration
-        .getInt(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.BITS_PER_ELEMENT));
-    final int stringColumnMaxLength = _segmentMetadataPropertiesConfiguration.getInt(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.DICTIONARY_ELEMENT_SIZE));
-
-    final FieldType fieldType = FieldType.valueOf(_segmentMetadataPropertiesConfiguration
-        .getString(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.COLUMN_TYPE))
-        .toUpperCase());
-
-    final boolean isSorted = _segmentMetadataPropertiesConfiguration
-        .getBoolean(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.IS_SORTED));
-
-    final boolean hasInvertedIndex = _segmentMetadataPropertiesConfiguration.getBoolean(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.HAS_INVERTED_INDEX));
-
-    final boolean insSingleValue = _segmentMetadataPropertiesConfiguration.getBoolean(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.IS_SINGLE_VALUED));
-
-    final int maxNumberOfMultiValues = _segmentMetadataPropertiesConfiguration.getInt(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.MAX_MULTI_VALUE_ELEMTS));
-
-    final boolean hasNulls = _segmentMetadataPropertiesConfiguration
-        .getBoolean(V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.HAS_NULL_VALUE));
-
-    TimeUnit segmentTimeUnit = TimeUnit.DAYS;
-    if (_segmentMetadataPropertiesConfiguration.containsKey(V1Constants.MetadataKeys.Segment.TIME_UNIT)) {
-      segmentTimeUnit = TimeUtils.timeUnitFromString(_segmentMetadataPropertiesConfiguration.getString(TIME_UNIT));
+    // Set the maxLeafRecords
+    String maxLeafRecordsString =
+        _segmentMetadataPropertiesConfiguration.getString(MetadataKeys.StarTree.STAR_TREE_MAX_LEAF_RECORDS);
+    if (maxLeafRecordsString != null) {
+      _starTreeMetadata.setMaxLeafRecords(Long.valueOf(maxLeafRecordsString));
     }
 
-    final boolean hasDictionary = _segmentMetadataPropertiesConfiguration.getBoolean(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.HAS_DICTIONARY), true);
+    // Set the splitOrder
+    Iterator<String> iterator =
+        _segmentMetadataPropertiesConfiguration.getList(MetadataKeys.StarTree.STAR_TREE_SPLIT_ORDER).iterator();
+    List<String> splitOrder = new ArrayList<String>();
+    while (iterator.hasNext()) {
+      final String splitColumn = iterator.next();
+      splitOrder.add(splitColumn);
+    }
+    _starTreeMetadata.setDimensionsSplitOrder(splitOrder);
 
-    final int totalNumberOfEntries = _segmentMetadataPropertiesConfiguration.getInt(
-        V1Constants.MetadataKeys.Column.getKeyFor(column, V1Constants.MetadataKeys.Column.TOTAL_NUMBER_OF_ENTRIES));
+    // Set dimensions for which star node creation is to be skipped.
+    iterator = _segmentMetadataPropertiesConfiguration.getList(
+        MetadataKeys.StarTree.STAR_TREE_SKIP_STAR_NODE_CREATION_FOR_DIMENSIONS).iterator();
+    List<String> skipStarNodeCreationForDimensions = new ArrayList<String>();
+    while (iterator.hasNext()) {
+      final String column = iterator.next();
+      skipStarNodeCreationForDimensions.add(column);
+    }
+    _starTreeMetadata.setSkipStarNodeCreationForDimensions(skipStarNodeCreationForDimensions);
 
-    return new ColumnMetadata(column, cardinality, totalRawDocs, totalAggDocs, totalDocs, dataType, bitsPerElement,
-        stringColumnMaxLength, fieldType, isSorted, hasInvertedIndex, insSingleValue, maxNumberOfMultiValues, hasNulls,
-        hasDictionary, segmentTimeUnit, totalNumberOfEntries);
+    // Set dimensions for which to skip materialization.
+    iterator = _segmentMetadataPropertiesConfiguration.getList(
+        MetadataKeys.StarTree.STAR_TREE_SKIP_MATERIALIZATION_FOR_DIMENSIONS).iterator();
+    List<String> skipMaterializationForDimensions = new ArrayList<String>();
 
+    while (iterator.hasNext()) {
+      final String column = iterator.next();
+      skipMaterializationForDimensions.add(column);
+    }
+    _starTreeMetadata.setSkipMaterializationForDimensions(skipMaterializationForDimensions);
+
+    // Skip skip materialization cardinality.
+    String skipMaterializationCardinalityString = _segmentMetadataPropertiesConfiguration.getString(
+        MetadataKeys.StarTree.STAR_TREE_SKIP_MATERIALIZATION_CARDINALITY);
+    if (skipMaterializationCardinalityString != null) {
+      _starTreeMetadata.setSkipMaterializationCardinality(Long.valueOf(skipMaterializationCardinalityString));
+    }
+  }
+
+  private ColumnMetadata extractColumnMetadataFor(String column) {
+    return ColumnMetadata.fromPropertiesConfiguration(column, _segmentMetadataPropertiesConfiguration);
   }
 
   public ColumnMetadata getColumnMetadataFor(String column) {
@@ -345,6 +351,10 @@ public class SegmentMetadataImpl implements SegmentMetadata {
   @Override
   public String getVersion() {
     return _segmentVersion.toString();
+  }
+
+  public SegmentVersion getSegmentVersion() {
+    return _segmentVersion;
   }
 
   @Override
@@ -460,6 +470,11 @@ public class SegmentMetadataImpl implements SegmentMetadata {
   }
 
   @Override
+  public StarTreeMetadata getStarTreeMetadata() {
+    return _starTreeMetadata;
+  }
+
+  @Override
   public String getForwardIndexFileName(String column, String segmentVersion) {
     ColumnMetadata columnMetadata = getColumnMetadataFor(column);
     StringBuilder fileNameBuilder = new StringBuilder(column);
@@ -481,16 +496,12 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
   @Override
   public String getDictionaryFileName(String column, String segmentVersion) {
-    StringBuilder fileNameBuilder = new StringBuilder(column);
-    fileNameBuilder.append(V1Constants.Dict.FILE_EXTENTION);
-    return fileNameBuilder.toString();
+    return column + V1Constants.Dict.FILE_EXTENTION;
   }
 
   @Override
   public String getBitmapInvertedIndexFileName(String column, String segmentVersion) {
-    StringBuilder fileNameBuilder = new StringBuilder(column);
-    fileNameBuilder.append(V1Constants.Indexes.BITMAP_INVERTED_INDEX_FILE_EXTENSION);
-    return fileNameBuilder.toString();
+    return column + V1Constants.Indexes.BITMAP_INVERTED_INDEX_FILE_EXTENSION;
   }
 
 }

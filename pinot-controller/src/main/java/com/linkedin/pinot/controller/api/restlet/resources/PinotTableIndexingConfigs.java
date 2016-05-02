@@ -3,6 +3,8 @@ package com.linkedin.pinot.controller.api.restlet.resources;
 import java.io.File;
 import java.io.IOException;
 
+import com.linkedin.pinot.common.metrics.ControllerMeter;
+import com.linkedin.pinot.controller.api.ControllerRestApplication;
 import org.apache.commons.io.FileUtils;
 import org.restlet.data.Status;
 import org.restlet.representation.Representation;
@@ -13,14 +15,14 @@ import org.slf4j.LoggerFactory;
 
 import com.linkedin.pinot.common.config.AbstractTableConfig;
 import com.linkedin.pinot.common.utils.CommonConstants.Helix.TableType;
-import com.linkedin.pinot.controller.api.swagger.HttpVerb;
-import com.linkedin.pinot.controller.api.swagger.Parameter;
-import com.linkedin.pinot.controller.api.swagger.Paths;
-import com.linkedin.pinot.controller.api.swagger.Summary;
-import com.linkedin.pinot.controller.api.swagger.Tags;
+import com.linkedin.pinot.common.restlet.swagger.HttpVerb;
+import com.linkedin.pinot.common.restlet.swagger.Parameter;
+import com.linkedin.pinot.common.restlet.swagger.Paths;
+import com.linkedin.pinot.common.restlet.swagger.Summary;
+import com.linkedin.pinot.common.restlet.swagger.Tags;
 
 
-public class PinotTableIndexingConfigs extends PinotRestletResourceBase {
+public class PinotTableIndexingConfigs extends BasePinotControllerRestletResource {
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotTableIndexingConfigs.class);
   private final File baseDataDir;
   private final File tempDir;
@@ -51,6 +53,7 @@ public class PinotTableIndexingConfigs extends PinotRestletResourceBase {
       return updateIndexingConfig(tableName, entity);
     } catch (final Exception e) {
       LOGGER.error("Caught exception while updating indexing configs for table {}", tableName, e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_INDEXING_GET_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
       return PinotSegmentUploadRestletResource.exceptionToStringRepresentation(e);
     }

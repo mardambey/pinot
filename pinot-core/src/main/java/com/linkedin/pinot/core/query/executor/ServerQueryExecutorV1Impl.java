@@ -45,20 +45,14 @@ import com.linkedin.pinot.core.query.config.QueryExecutorConfig;
 import com.linkedin.pinot.core.query.pruner.SegmentPrunerService;
 import com.linkedin.pinot.core.query.pruner.SegmentPrunerServiceImpl;
 import com.linkedin.pinot.core.util.trace.TraceContext;
-import com.yammer.metrics.Metrics;
-import com.yammer.metrics.core.MetricName;
-import com.yammer.metrics.core.Timer;
 
 public class ServerQueryExecutorV1Impl implements QueryExecutor {
-
   private static final Logger LOGGER = LoggerFactory.getLogger(ServerQueryExecutorV1Impl.class);
 
-  private static final String Domain = "com.linkedin.pinot";
   private QueryExecutorConfig _queryExecutorConfig = null;
   private InstanceDataManager _instanceDataManager = null;
   private SegmentPrunerService _segmentPrunerService = null;
   private PlanMaker _planMaker = null;
-  private Timer _queryExecutorTimer = null;
   private volatile boolean _isStarted = false;
   private long _defaultTimeOutMs = 15000;
   private boolean _printQueryPlan = false;
@@ -87,13 +81,8 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       _segmentPrunerService = new SegmentPrunerServiceImpl(_queryExecutorConfig.getPrunerConfig());
     }
     LOGGER.info("Trying to build QueryPlanMaker");
-    _planMaker = new InstancePlanMakerImplV2();
+    _planMaker = new InstancePlanMakerImplV2(_queryExecutorConfig);
     LOGGER.info("Trying to build QueryExecutorTimer");
-    if (_queryExecutorTimer == null) {
-      _queryExecutorTimer =
-          Metrics.newTimer(new MetricName(Domain, "timer", "query-executor-time-"), TimeUnit.MILLISECONDS,
-              TimeUnit.SECONDS);
-    }
   }
 
   @Override
@@ -101,6 +90,9 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
     DataTable instanceResponse;
     long start = System.currentTimeMillis();
     List<SegmentDataManager> queryableSegmentDataManagerList = null;
+    final long requestId = instanceRequest.getRequestId();
+    final long nSegmentsInQuery = instanceRequest.getSearchSegmentsSize();
+    long nPrunedSegments = -1;
     try {
       TraceContext.register(instanceRequest);
       final BrokerRequest brokerRequest = instanceRequest.getQuery();
@@ -109,18 +101,19 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       queryableSegmentDataManagerList = getPrunedQueryableSegments(instanceRequest);
       long pruningTime = System.nanoTime() - startPruningTime;
       _serverMetrics.addPhaseTiming(brokerRequest, ServerQueryPhase.SEGMENT_PRUNING, pruningTime);
-      LOGGER.info("Matched {} segments! ", queryableSegmentDataManagerList.size());
+      nPrunedSegments = queryableSegmentDataManagerList.size();
+      LOGGER.debug("Matched {} segments! ", nPrunedSegments);
       if (queryableSegmentDataManagerList.isEmpty()) {
         return null;
       }
-      long startPlanTime = System.nanoTime();
+      final long startPlanTime = System.nanoTime();
       final Plan globalQueryPlan = _planMaker.makeInterSegmentPlan(
           queryableSegmentDataManagerList,
           brokerRequest,
           _instanceDataManager.getTableDataManager(brokerRequest.getQuerySource().getTableName())
               .getExecutorService(),
           getResourceTimeOut(instanceRequest.getQuery()));
-      long planTime = System.nanoTime() - startPlanTime;
+      final long planTime = System.nanoTime() - startPlanTime;
       _serverMetrics.addPhaseTiming(brokerRequest, ServerQueryPhase.BUILD_QUERY_PLAN, planTime);
 
       if (_printQueryPlan) {
@@ -129,27 +122,31 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
         LOGGER.debug("*********************************** End Query Plan ***********************************");
       }
 
-      long executeStartTime = System.nanoTime();
+      final long executeStartTime = System.nanoTime();
       globalQueryPlan.execute();
-      long executeTime = System.nanoTime() - executeStartTime;
+      final long executeTime = System.nanoTime() - executeStartTime;
       _serverMetrics.addPhaseTiming(brokerRequest, ServerQueryPhase.QUERY_PLAN_EXECUTION, executeTime);
       instanceResponse = globalQueryPlan.getInstanceResponse();
-      long end = System.currentTimeMillis();
-      LOGGER.info("Searching Instance for Request Id - {}, browse took: {}", instanceRequest.getRequestId(), (end - start));
+      final long end = System.currentTimeMillis();
+      LOGGER.debug("Searching Instance for Request Id - {}, browse took: {}", instanceRequest.getRequestId(),
+          (end - start));
       LOGGER.debug("InstanceResponse for Request Id - {} : {}", instanceRequest.getRequestId(), instanceResponse.toString());
       instanceResponse.getMetadata().put("timeUsedMs", Long.toString((end - start)));
       instanceResponse.getMetadata().put("requestId", Long.toString(instanceRequest.getRequestId()));
       instanceResponse.getMetadata().put("traceInfo", TraceContext.getTraceInfoOfRequestId(instanceRequest.getRequestId()));
+      LOGGER.info("Processed requestId {},reqSegments={},prunedSegments={},planTime={},timeUsed={},executeTime={}",
+          requestId, nSegmentsInQuery, nPrunedSegments, TimeUnit.MILLISECONDS.convert(planTime, TimeUnit.NANOSECONDS),
+          (end-start), TimeUnit.MILLISECONDS.convert(executeTime, TimeUnit.NANOSECONDS));
       return instanceResponse;
     } catch (Exception e) {
-      _serverMetrics.addMeteredValue(instanceRequest.getQuery(), ServerMeter.QUERY_EXECUTION_EXCEPTIONS, 1);
-      LOGGER.error(e.getMessage(), e);
+      _serverMetrics.addMeteredQueryValue(instanceRequest.getQuery(), ServerMeter.QUERY_EXECUTION_EXCEPTIONS, 1);
+      LOGGER.error("Exception processing requestId {}", requestId, e);
       instanceResponse = new DataTable();
       instanceResponse.addException(QueryException.getException(QueryException.QUERY_EXECUTION_ERROR, e));
       TraceContext.logException("ServerQueryExecutorV1Impl", "Exception occurs in processQuery");
       long end = System.currentTimeMillis();
-      LOGGER.info("Searching Instance for Request Id - {}, browse took: {}", instanceRequest.getRequestId(), (end - start));
-      LOGGER.debug("InstanceResponse for Request Id - {} : {}", instanceRequest.getRequestId(), instanceResponse.toString());
+      LOGGER.info("Searching Instance for Request Id - {}, browse took: {}", requestId, requestId, (end - start));
+      LOGGER.info("InstanceResponse for Request Id - {} : {}", requestId, instanceResponse.toString());
       instanceResponse.getMetadata().put("timeUsedMs", Long.toString((end - start)));
       instanceResponse.getMetadata().put("requestId", Long.toString(instanceRequest.getRequestId()));
       instanceResponse.getMetadata().put("traceInfo", TraceContext.getTraceInfoOfRequestId(instanceRequest.getRequestId()));
@@ -168,7 +165,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
   }
 
   private List<SegmentDataManager> getPrunedQueryableSegments(final InstanceRequest instanceRequest) {
-    LOGGER.info("InstanceRequest contains {} segments", instanceRequest.getSearchSegments().size());
+    LOGGER.debug("InstanceRequest contains {} segments", instanceRequest.getSearchSegments().size());
 
     final String tableName = instanceRequest.getQuery().getQuerySource().getTableName();
     final TableDataManager tableDataManager = _instanceDataManager.getTableDataManager(tableName);
@@ -177,7 +174,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
     }
     List<SegmentDataManager> listOfQueryableSegments = tableDataManager.acquireSegments(
         instanceRequest.getSearchSegments());
-    LOGGER.info("TableDataManager found {} segments before pruning", listOfQueryableSegments.size());
+    LOGGER.debug("TableDataManager found {} segments before pruning", listOfQueryableSegments.size());
 
     Iterator<SegmentDataManager> it = listOfQueryableSegments.iterator();
     while (it.hasNext()) {

@@ -256,7 +256,7 @@ public class CustomDashboardResource {
         ThirdEyeRequestUtils.expandDimensionGroups(dimensionValues, dimensionGroups);
 
     ThirdEyeRequest req = new ThirdEyeRequestBuilder().setCollection(collection)
-        .setMetricFunction(metricFunction).setStartTime(baseline).setEndTime(current)
+        .setMetricFunction(metricFunction).setStartTimeInclusive(baseline).setEndTime(current)
         .setDimensionValues(expandedDimensionValues).setGroupBy(groupBy).build();
     QueryResult result = queryCache.getQueryResult(req);
 
@@ -333,7 +333,7 @@ public class CustomDashboardResource {
 
   private CustomFunnelTabularView getCustomFunnelTabularView(String collection, Integer year,
       Integer month, Integer day, List<String> metricList, Multimap<String, String> queryParams)
-          throws Exception {
+      throws Exception {
     // Always aggregate at 1 hour (for intra-day style report)
     String metricFunction = "AGGREGATE_1_HOURS(" + METRIC_FUNCTION_JOINER.join(metricList) + ")";
 
@@ -353,10 +353,10 @@ public class CustomDashboardResource {
 
     // Requests
     ThirdEyeRequest baselineReq = new ThirdEyeRequestBuilder().setCollection(collection)
-        .setMetricFunction(metricFunction).setStartTime(baselineStart).setEndTime(baselineEnd)
+        .setMetricFunction(metricFunction).setStartTimeInclusive(baselineStart).setEndTime(baselineEnd)
         .setDimensionValues(expandedDimensionValues).build();
     ThirdEyeRequest currentReq = new ThirdEyeRequestBuilder().setCollection(collection)
-        .setMetricFunction(metricFunction).setStartTime(currentStart).setEndTime(currentEnd)
+        .setMetricFunction(metricFunction).setStartTimeInclusive(currentStart).setEndTime(currentEnd)
         .setDimensionValues(expandedDimensionValues).build();
     LOG.info("Generated Req: {}", baselineReq);
     LOG.info("Generated Req: {}", currentReq);
@@ -433,7 +433,11 @@ public class CustomDashboardResource {
   static Map<Long, Number[]> extractFunnelData(QueryResult queryResult) throws Exception {
     Map<Long, Number[]> data = new HashMap<>();
 
-    if (queryResult.getData().size() != 1) {
+    if (queryResult.getData().isEmpty()) {
+      LOG.warn("No data returned!");
+      return Collections.emptyMap();
+    }
+    if (queryResult.getData().size() > 1) {
       throw new WebApplicationException(
           new Exception("Custom funnel tabular view cannot support multi-dimensional queries"),
           Response.Status.BAD_REQUEST);

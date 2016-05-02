@@ -27,7 +27,17 @@ public enum ServerMeter implements AbstractMetrics.Meter {
   UNCAUGHT_EXCEPTIONS("exceptions", true),
   RESPONSE_SERIALIZATION_EXCEPTIONS("exceptions", true),
   QUERY_EXECUTION_EXCEPTIONS("exceptions", false),
-  HELIX_ZOOKEEPER_RECONNECTS("reconnects", true);
+  HELIX_ZOOKEEPER_RECONNECTS("reconnects", true),
+  DELETED_SEGMENT_COUNT("segments", false),
+  REALTIME_ROWS_CONSUMED("rows", true),
+  INVALID_REALTIME_ROWS_DROPPED("rows", false),
+  REALTIME_CONSUMPTION_EXCEPTIONS("exceptions", true),
+  REALTIME_OFFSET_COMMITS("commits", true),
+  REALTIME_OFFSET_COMMIT_EXCEPTIONS("exceptions", false),
+  ROWS_WITH_ERRORS("rows", false),
+  ROWS_NEEDING_CONVERSIONS("rows", false),
+  ROWS_WITH_NULL_VALUES("rows", false),
+  COLUMNS_WITH_NULL_VALUES("columns", false);
 
   private final String meterName;
   private final String unit;

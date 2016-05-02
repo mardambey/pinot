@@ -30,6 +30,7 @@ import com.linkedin.pinot.common.utils.helix.HelixHelper;
 import com.linkedin.pinot.common.utils.retry.RetryPolicies;
 import com.linkedin.pinot.controller.helix.core.PinotHelixResourceManager;
 import com.linkedin.pinot.controller.helix.core.PinotTableIdealStateBuilder;
+import com.linkedin.pinot.core.query.utils.Pair;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -71,8 +72,6 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
   private String _tableConfigPath;
   private final PinotHelixResourceManager _pinotHelixResourceManager;
   private ZkClient _zkClient;
-
-
 
   public PinotRealtimeSegmentManager(PinotHelixResourceManager pinotManager) {
     _pinotHelixResourceManager = pinotManager;
@@ -119,7 +118,7 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
           .getResourceIdealState(_pinotHelixResourceManager.getHelixClusterName(), resource));
     }
 
-    List<String> listOfSegmentsToAdd = new ArrayList<String>();
+    List<Pair<String, String>> listOfSegmentsToAddToInstances = new ArrayList<Pair<String, String>>();
 
     for (String resource : idealStateMap.keySet()) {
       IdealState state = idealStateMap.get(resource);
@@ -138,10 +137,18 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
         // Assign a new segment to all server instances
         for (String instanceId : instancesInResource) {
           InstanceZKMetadata instanceZKMetadata = _pinotHelixResourceManager.getInstanceZKMetadata(instanceId);
+
+          if (instanceZKMetadata == null) {
+            LOGGER.warn("Instance {} has no associated instance metadata in ZK, ignoring for segment assignment.",
+                instanceId);
+            continue;
+          }
+
           String groupId = instanceZKMetadata.getGroupId(resource);
           String partitionId = instanceZKMetadata.getPartition(resource);
-          listOfSegmentsToAdd.add(SegmentNameBuilder.Realtime
-              .build(resource, instanceId, groupId, partitionId, String.valueOf(System.currentTimeMillis())));
+          listOfSegmentsToAddToInstances.add(new Pair<String, String>(
+                  SegmentNameBuilder.Realtime.build(groupId, partitionId,
+                      String.valueOf(System.currentTimeMillis())), instanceId));
         }
       } else {
         // Add all server instances to the list of instances for which to assign a realtime segment
@@ -155,8 +162,7 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
               ZKMetadataProvider.getRealtimeSegmentZKMetadata(_pinotHelixResourceManager.getPropertyStore(),
                   SegmentNameBuilder.Realtime.extractTableName(partition), partition);
           if (realtimeSegmentZKMetadata.getStatus() == Status.IN_PROGRESS) {
-            String instanceName = SegmentNameBuilder.Realtime.extractInstanceName(partition);
-            instancesToAssignRealtimeSegment.remove(instanceName);
+            instancesToAssignRealtimeSegment.removeAll(state.getInstanceSet(partition));
           }
         }
 
@@ -165,18 +171,19 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
           InstanceZKMetadata instanceZKMetadata = _pinotHelixResourceManager.getInstanceZKMetadata(instanceId);
           String groupId = instanceZKMetadata.getGroupId(resource);
           String partitionId = instanceZKMetadata.getPartition(resource);
-          listOfSegmentsToAdd.add(SegmentNameBuilder.Realtime
-              .build(resource, instanceId, groupId, partitionId, String.valueOf(System.currentTimeMillis())));
+          listOfSegmentsToAddToInstances.add(new Pair<String, String>(
+                  SegmentNameBuilder.Realtime.build(groupId, partitionId, String.valueOf(System.currentTimeMillis())), instanceId));
         }
       }
     }
 
-    LOGGER.info("Computed list of new segments to add : " + Arrays.toString(listOfSegmentsToAdd.toArray()));
+    LOGGER.info("Computed list of new segments to add : " + Arrays.toString(listOfSegmentsToAddToInstances.toArray()));
 
     // Add the new segments to the server instances
-    for (final String segmentId : listOfSegmentsToAdd) {
+    for (final Pair<String, String> segmentIdAndInstanceId : listOfSegmentsToAddToInstances) {
+      final String segmentId = segmentIdAndInstanceId.getFirst();
+      final String instanceName = segmentIdAndInstanceId.getSecond();
       String resourceName = SegmentNameBuilder.Realtime.extractTableName(segmentId);
-      final String instanceName = SegmentNameBuilder.Realtime.extractInstanceName(segmentId);
 
       // Does the ideal state already contain this segment?
       if (!idealStateMap.get(resourceName).getPartitionSet().contains(segmentId)) {
@@ -212,16 +219,19 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
 
   @Override
   public synchronized void onDataChange(String path) {
+    LOGGER.info("PinotRealtimeSegmentManager.onDataChange: {}", path);
     processPropertyStoreChange(path);
   }
 
   @Override
   public synchronized void onDataCreate(String path) {
+    LOGGER.info("PinotRealtimeSegmentManager.onDataCreate: {}", path);
     processPropertyStoreChange(path);
   }
 
   @Override
   public synchronized void onDataDelete(String path) {
+    LOGGER.info("PinotRealtimeSegmentManager.onDataDelete: {}", path);
     processPropertyStoreChange(path);
   }
 
@@ -299,18 +309,27 @@ public class PinotRealtimeSegmentManager implements HelixPropertyListener, IZkCh
   @Override
   public void handleChildChange(String parentPath, List<String> currentChilds)
       throws Exception {
+    LOGGER.info("PinotRealtimeSegmentManager.handleChildChange: {}", parentPath);
     processPropertyStoreChange(parentPath);
+    for (String table : currentChilds) {
+      if (table.endsWith("_REALTIME")) {
+        LOGGER.info("PinotRealtimeSegmentManager.handleChildChange with table: {}", parentPath + "/" + table);
+        processPropertyStoreChange(parentPath + "/" + table);
+      }
+    }
   }
 
   @Override
   public void handleDataChange(String dataPath, Object data)
       throws Exception {
+    LOGGER.info("PinotRealtimeSegmentManager.handleDataChange: {}", dataPath);
     processPropertyStoreChange(dataPath);
   }
 
   @Override
   public void handleDataDeleted(String dataPath)
       throws Exception {
+    LOGGER.info("PinotRealtimeSegmentManager.handleDataDeleted: {}", dataPath);
     processPropertyStoreChange(dataPath);
   }
 }
