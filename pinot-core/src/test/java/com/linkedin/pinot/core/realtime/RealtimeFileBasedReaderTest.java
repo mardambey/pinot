@@ -15,6 +15,8 @@
  */
 package com.linkedin.pinot.core.realtime;
 
+import com.linkedin.pinot.common.metrics.ServerMetrics;
+import com.yammer.metrics.core.MetricsRegistry;
 import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
@@ -56,6 +58,7 @@ public class RealtimeFileBasedReaderTest {
   private static Schema schema;
   private static RealtimeSegmentImpl realtimeSegment;
   private static IndexSegment offlineSegment;
+  private static final String segmentName = "someSegment";
 
   @BeforeClass
   public static void before() throws Exception {
@@ -79,9 +82,11 @@ public class RealtimeFileBasedReaderTest {
 
     StreamProviderConfig config = new FileBasedStreamProviderConfig(FileFormat.AVRO, filePath, schema);
     StreamProvider provider = new FileBasedStreamProviderImpl();
-    provider.init(config);
+    final String tableName = RealtimeFileBasedReaderTest.class.getSimpleName()+".noTable";
+    provider.init(config, tableName, new ServerMetrics(new MetricsRegistry()));
 
-    realtimeSegment = new RealtimeSegmentImpl(schema, 100000);
+    realtimeSegment = new RealtimeSegmentImpl(schema, 100000, tableName, segmentName, AVRO_DATA, new
+        ServerMetrics(new MetricsRegistry()));
     GenericRow row = provider.next();
     while (row != null) {
       realtimeSegment.index(row);
@@ -95,7 +100,7 @@ public class RealtimeFileBasedReaderTest {
     }
 
     RealtimeSegmentConverter conveter =
-        new RealtimeSegmentConverter(realtimeSegment, "/tmp/realtime", schema, "testTable", "seomg-segment", null);
+        new RealtimeSegmentConverter(realtimeSegment, "/tmp/realtime", schema, tableName, segmentName, null);
     conveter.build();
 
     offlineSegment = Loaders.IndexSegment.load(new File("/tmp/realtime").listFiles()[0], ReadMode.mmap);

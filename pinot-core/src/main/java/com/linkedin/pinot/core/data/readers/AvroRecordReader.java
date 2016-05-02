@@ -79,8 +79,7 @@ public class AvroRecordReader extends BaseRecordReader {
       _dataStream =
           new DataFileStream<GenericRecord>(new FileInputStream(file), new GenericDatumReader<GenericRecord>());
     }
-
-    updateSchema(_schemaExtractor.getSchema());
+    validateSchema(_schemaExtractor.getSchema());
   }
 
   @Override
@@ -92,7 +91,7 @@ public class AvroRecordReader extends BaseRecordReader {
   public GenericRow next() {
     try {
       _genericRecord = _dataStream.next(_genericRecord);
-      return _schemaExtractor.transform(getGenericRow(_genericRecord));
+      return getGenericRow(_genericRecord);
     } catch (IOException e) {
       LOGGER.error("Caught exception while reading record", e);
       Utils.rethrowException(e);
@@ -149,11 +148,20 @@ public class AvroRecordReader extends BaseRecordReader {
     return _schemaExtractor.getSchema();
   }
 
-  private void updateSchema(Schema schema) {
+  private void validateSchema(Schema schema) {
     for (final FieldSpec fieldSpec : schema.getAllFieldSpecs()) {
-      fieldSpec.setDataType(getColumnType(_dataStream.getSchema().getField(fieldSpec.getName())));
-      fieldSpec.setSingleValueField(isSingleValueField(_dataStream.getSchema().getField(fieldSpec.getName())));
-      schema.addSchema(fieldSpec.getName(), fieldSpec);
+        Field fieldStream = _dataStream.getSchema().getField(fieldSpec.getName());
+        if (fieldStream == null) {
+          LOGGER.warn("Pinot field {} absent in Avro Schema", fieldSpec.getName());
+        } else if (fieldSpec.getDataType() != getColumnType(fieldStream)) {
+          LOGGER.warn("Pinot field {} of type {} mismatches with corresponding field in Avro Schema of type {}",
+              fieldSpec.getName(), fieldSpec.getDataType(), getColumnType(fieldStream));
+        }
+        else if (fieldSpec.isSingleValueField() != isSingleValueField(fieldStream)) {
+          LOGGER.warn("{} -valued Pinot field {} mismatches with corresponding {} -valued field in Avro Schema",
+              fieldSpec.isSingleValueField() ? "Single" : "Multi", fieldSpec.getName(),
+              isSingleValueField(fieldStream)? "Single" : "Multi");
+      }
     }
   }
 

@@ -15,60 +15,47 @@
  */
 package com.linkedin.pinot.broker.servlet;
 
-import com.linkedin.pinot.common.exception.QueryException;
-import com.linkedin.pinot.common.metrics.BrokerMeter;
-import com.linkedin.pinot.common.metrics.BrokerMetrics;
-import com.linkedin.pinot.common.metrics.BrokerQueryPhase;
-import com.linkedin.pinot.common.request.BrokerRequest;
-import com.linkedin.pinot.common.response.BrokerResponse;
-import com.linkedin.pinot.common.response.ServerInstance;
-import com.linkedin.pinot.pql.parsers.PQLCompiler;
-import com.linkedin.pinot.pql.parsers.Pql2Compiler;
-import com.linkedin.pinot.requestHandler.BrokerRequestHandler;
-import com.linkedin.pinot.transport.common.BucketingSelection;
-import com.linkedin.pinot.transport.common.SegmentId;
-import com.linkedin.pinot.transport.scattergather.ScatterGatherStats;
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicLong;
+
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.linkedin.pinot.common.metrics.BrokerMeter;
+import com.linkedin.pinot.common.metrics.BrokerMetrics;
+import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.requestHandler.BrokerRequestHandler;
+
 
 public class PinotClientRequestServlet extends HttpServlet {
-  private static final PQLCompiler requestCompiler = new PQLCompiler(new HashMap<String, String[]>());
-  private static final Pql2Compiler pql2Compiler = new Pql2Compiler();
 
   private static final long serialVersionUID = -3516093545255816357L;
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotClientRequestServlet.class);
 
   private BrokerRequestHandler broker;
   private BrokerMetrics brokerMetrics;
-  private AtomicLong requestIdGenerator;
 
   @Override
   public void init(ServletConfig config) throws ServletException {
     broker = (BrokerRequestHandler) config.getServletContext().getAttribute(BrokerRequestHandler.class.toString());
     brokerMetrics = (BrokerMetrics) config.getServletContext().getAttribute(BrokerMetrics.class.toString());
-    requestIdGenerator = new AtomicLong(0);
   }
 
   @Override
   protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
     try {
       resp.setCharacterEncoding("UTF-8");
-      resp.getOutputStream().print(handleRequest(new JSONObject(req.getParameter("bql"))).toJson().toString());
+      BrokerResponse brokerResponse = broker.handleRequest(new JSONObject(req.getParameter("bql")));
+      String jsonString = brokerResponse.toJsonString();
+      resp.getOutputStream().print(jsonString);
       resp.getOutputStream().flush();
       resp.getOutputStream().close();
     } catch (final Exception e) {
@@ -76,7 +63,7 @@ public class PinotClientRequestServlet extends HttpServlet {
       resp.getOutputStream().flush();
       resp.getOutputStream().close();
       LOGGER.error("Caught exception while processing GET request", e);
-      brokerMetrics.addMeteredValue(null, BrokerMeter.UNCAUGHT_GET_EXCEPTIONS, 1);
+      brokerMetrics.addMeteredGlobalValue(BrokerMeter.UNCAUGHT_GET_EXCEPTIONS, 1);
     }
   }
 
@@ -84,7 +71,9 @@ public class PinotClientRequestServlet extends HttpServlet {
   protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
     try {
       resp.setCharacterEncoding("UTF-8");
-      resp.getOutputStream().print(handleRequest(extractJSON(req)).toJson().toString());
+      BrokerResponse brokerResponse = broker.handleRequest(extractJSON(req));
+      String jsonString = brokerResponse.toJsonString();
+      resp.getOutputStream().print(jsonString);
       resp.getOutputStream().flush();
       resp.getOutputStream().close();
     } catch (final Exception e) {
@@ -92,74 +81,8 @@ public class PinotClientRequestServlet extends HttpServlet {
       resp.getOutputStream().flush();
       resp.getOutputStream().close();
       LOGGER.error("Caught exception while processing POST request", e);
-      brokerMetrics.addMeteredValue(null, BrokerMeter.UNCAUGHT_POST_EXCEPTIONS, 1);
+      brokerMetrics.addMeteredGlobalValue(BrokerMeter.UNCAUGHT_POST_EXCEPTIONS, 1);
     }
-  }
-
-  private BrokerResponse handleRequest(JSONObject request) throws Exception {
-    final String pql = request.getString("pql");
-    final long requestId = requestIdGenerator.incrementAndGet();
-    LOGGER.info("Query string for requestId {}: {}", requestId, pql);
-    boolean isTraceEnabled = false;
-
-    if (request.has("trace")) {
-      try {
-        isTraceEnabled = Boolean.parseBoolean(request.getString("trace"));
-        LOGGER.info("Trace is set to: {}", isTraceEnabled);
-      } catch (Exception e) {
-        LOGGER.warn("Invalid trace value: {}", request.getString("trace"), e);
-      }
-    } else {
-      // ignore, trace is disabled by default
-    }
-
-    final long startTime = System.nanoTime();
-    final BrokerRequest brokerRequest;
-    try {
-      if (request.has("dialect") && "bql".equals(request.getString("dialect"))) {
-        final JSONObject compiled = requestCompiler.compile(pql);
-        brokerRequest = convertToBrokerRequest(compiled);
-      } else {
-        brokerRequest = pql2Compiler.compileToBrokerRequest(pql);
-      }
-      if (isTraceEnabled) brokerRequest.setEnableTrace(true);
-    } catch (Exception e) {
-      BrokerResponse brokerResponse = new BrokerResponse();
-      brokerResponse.setExceptions(Arrays.asList(QueryException.getException(QueryException.PQL_PARSING_ERROR, e)));
-      brokerMetrics.addMeteredValue(null, BrokerMeter.REQUEST_COMPILATION_EXCEPTIONS, 1);
-      return brokerResponse;
-    }
-
-    brokerMetrics.addMeteredValue(brokerRequest, BrokerMeter.QUERIES, 1);
-
-    final long requestCompilationTime = System.nanoTime() - startTime;
-    brokerMetrics.addPhaseTiming(brokerRequest, BrokerQueryPhase.REQUEST_COMPILATION,
-            requestCompilationTime);
-    final ScatterGatherStats scatterGatherStats = new ScatterGatherStats();
-
-    final BrokerResponse resp = brokerMetrics.timePhase(brokerRequest, BrokerQueryPhase.QUERY_EXECUTION,
-            new Callable<BrokerResponse>() {
-              @Override
-              public BrokerResponse call()
-                      throws Exception {
-                final BucketingSelection bucketingSelection = getBucketingSelection(brokerRequest);
-                return (BrokerResponse) broker.processBrokerRequest(brokerRequest, bucketingSelection,
-                    scatterGatherStats, requestId);
-              }
-            });
-
-    LOGGER.info("Broker Response : {}", resp);
-    LOGGER.info("ResponseTimes for {} {}", requestId, scatterGatherStats);
-    return resp;
-  }
-
-  private BucketingSelection getBucketingSelection(BrokerRequest brokerRequest) {
-    final Map<SegmentId, ServerInstance> bucketMap = new HashMap<>();
-    return new BucketingSelection(bucketMap);
-  }
-
-  private BrokerRequest convertToBrokerRequest(JSONObject compiled) throws Exception {
-    return com.linkedin.pinot.common.client.request.RequestConverter.fromJSON(compiled);
   }
 
   private JSONObject extractJSON(HttpServletRequest req) throws IOException, JSONException {

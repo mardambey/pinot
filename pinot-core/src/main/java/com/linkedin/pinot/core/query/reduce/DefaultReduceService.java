@@ -20,7 +20,7 @@ import com.linkedin.pinot.common.exception.QueryException;
 import com.linkedin.pinot.common.query.ReduceService;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.common.response.AggregationResult;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.InstanceResponse;
 import com.linkedin.pinot.common.response.ProcessingException;
 import com.linkedin.pinot.common.response.ResponseStatistics;
@@ -50,7 +50,7 @@ import org.slf4j.LoggerFactory;
  *
  *
  */
-public class DefaultReduceService implements ReduceService {
+public class DefaultReduceService implements ReduceService<BrokerResponseJSON> {
   private static final Logger LOGGER = LoggerFactory.getLogger(DefaultReduceService.class);
 
   private static String NUM_DOCS_SCANNED = "numDocsScanned";
@@ -58,8 +58,8 @@ public class DefaultReduceService implements ReduceService {
   private static String TOTAL_DOCS = "totalDocs";
 
   @Override
-  public BrokerResponse reduce(BrokerRequest brokerRequest, Map<ServerInstance, InstanceResponse> instanceResponseMap) {
-    BrokerResponse brokerResponse = new BrokerResponse();
+  public BrokerResponseJSON reduce(BrokerRequest brokerRequest, Map<ServerInstance, InstanceResponse> instanceResponseMap) {
+    BrokerResponseJSON brokerResponse = new BrokerResponseJSON();
 
     List<List<AggregationResult>> aggregationResultsList = new ArrayList<List<AggregationResult>>();
     for (int i = 0; i < brokerRequest.getAggregationsInfoSize(); ++i) {
@@ -107,11 +107,11 @@ public class DefaultReduceService implements ReduceService {
   }
 
   @Override
-  public BrokerResponse reduceOnDataTable(BrokerRequest brokerRequest,
+  public BrokerResponseJSON reduceOnDataTable(BrokerRequest brokerRequest,
       Map<ServerInstance, DataTable> instanceResponseMap) {
-    BrokerResponse brokerResponse = new BrokerResponse();
+    BrokerResponseJSON brokerResponse = new BrokerResponseJSON();
     if (instanceResponseMap == null || instanceResponseMap.size() == 0) {
-      return BrokerResponse.EMPTY_RESULT;
+      return BrokerResponseJSON.EMPTY_RESULT;
     }
     for (ServerInstance serverInstance : instanceResponseMap.keySet().toArray(new ServerInstance[instanceResponseMap.size()])) {
       DataTable instanceResponse = instanceResponseMap.get(serverInstance);
@@ -127,7 +127,7 @@ public class DefaultReduceService implements ReduceService {
 
       if (instanceResponse.getDataSchema() == null && instanceResponse.getMetadata() != null) {
         for (String key : instanceResponse.getMetadata().keySet()) {
-          if (key.startsWith("Exception")) {
+          if (key.startsWith(DataTable.EXCEPTION_METADATA_KEY)) {
             ProcessingException processingException = new ProcessingException();
             processingException.setErrorCode(Integer.parseInt(key.substring(9)));
             processingException.setMessage(instanceResponse.getMetadata().get(key));
@@ -247,8 +247,8 @@ public class DefaultReduceService implements ReduceService {
   private List<JSONObject> reduceOnAggregationGroupByOperatorResults(
       AggregationGroupByOperatorService aggregationGroupByOperatorService,
       Map<ServerInstance, DataTable> instanceResponseMap) {
-    return aggregationGroupByOperatorService.renderGroupByOperators(aggregationGroupByOperatorService
-        .reduceGroupByOperators(instanceResponseMap));
+    return aggregationGroupByOperatorService.renderGroupByOperators(
+        aggregationGroupByOperatorService.reduceGroupByOperators(instanceResponseMap));
   }
 
   private List<JSONObject> reduceOnAggregationResults(BrokerRequest brokerRequest,

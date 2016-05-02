@@ -1,27 +1,36 @@
 package com.linkedin.thirdeye.dashboard.views;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.linkedin.thirdeye.dashboard.api.*;
-import com.linkedin.thirdeye.dashboard.util.SnapshotUtils;
-import com.linkedin.thirdeye.dashboard.util.ViewUtils;
-
 import io.dropwizard.views.View;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.apache.commons.lang.math.NumberUtils;
 import org.apache.commons.math3.distribution.NormalDistribution;
 import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
+import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
-import java.util.regex.Pattern;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.linkedin.thirdeye.api.StarTreeConstants;
+import com.linkedin.thirdeye.dashboard.api.CollectionSchema;
+import com.linkedin.thirdeye.dashboard.api.HeatMap;
+import com.linkedin.thirdeye.dashboard.api.HeatMapCell;
+import com.linkedin.thirdeye.dashboard.api.QueryResult;
+import com.linkedin.thirdeye.dashboard.util.ViewUtils;
 
 public class DimensionViewHeatMap extends View {
   private static final Logger LOGGER = LoggerFactory.getLogger(DimensionViewHeatMap.class);
-  private static final TypeReference<List<String>> LIST_TYPE_REFERENCE =
-      new TypeReference<List<String>>() {
-      };
+  private static final String OTHER = StarTreeConstants.OTHER;
   private final CollectionSchema schema;
   private final ObjectMapper objectMapper;
   private final List<HeatMap> heatMaps;
@@ -31,10 +40,13 @@ public class DimensionViewHeatMap extends View {
       new HashMap<String, Map<String, Number>>();
   private final Map<String, Map<String, String>> dimensionGroupMap;
   private final Map<String, Map<Pattern, String>> dimensionRegexMap;
+  private final DateTime baseline;
+  private final DateTime current;
 
   public DimensionViewHeatMap(CollectionSchema schema, ObjectMapper objectMapper,
       Map<String, QueryResult> queryResults, Map<String, Map<String, String>> dimensionGroupMap,
-      Map<String, Map<Pattern, String>> dimensionRegexMap) throws Exception {
+      Map<String, Map<Pattern, String>> dimensionRegexMap, DateTime baseline, DateTime current,
+      QueryResult resultForTotal) throws Exception {
     super("dimension/heat-map.ftl");
     this.schema = schema;
     this.objectMapper = objectMapper;
@@ -43,9 +55,14 @@ public class DimensionViewHeatMap extends View {
     this.heatMaps = new ArrayList<>();
     this.metricNames = new ArrayList<>();
     this.dimensionNames = new ArrayList<>();
+    this.baseline = baseline;
+    this.current = current;
+
+    updateMetricGlobalStats(resultForTotal);
 
     for (Map.Entry<String, QueryResult> entry : queryResults.entrySet()) {
-      this.heatMaps.addAll(generateHeatMaps(entry.getKey(), entry.getValue()));
+      List<HeatMap> heatMapsPerDimension = generateHeatMaps(entry.getKey(), entry.getValue());
+      this.heatMaps.addAll(heatMapsPerDimension);
     }
 
     Collections.sort(heatMaps);
@@ -57,6 +74,7 @@ public class DimensionViewHeatMap extends View {
         dimensionNames.add(heatMap.getDimension());
       }
     }
+
   }
 
   public Map<String, Map<String, Number>> getMetricGlobalStats() {
@@ -73,6 +91,45 @@ public class DimensionViewHeatMap extends View {
 
   public List<String> getDimensionNames() {
     return dimensionNames;
+  }
+
+  public DateTime getBaseline() {
+    return baseline;
+  }
+
+  public DateTime getCurrent() {
+    return current;
+  }
+
+  private Map<String, Map<String, Number>> updateMetricGlobalStats(QueryResult resultForTotal) {
+
+    // resultForTotal will have just one entry because it's summation/total call
+    Map<String, Number[]> totalForMetric = resultForTotal.getData().values().iterator().next();
+    String minTimestamp = String.valueOf(baseline.getMillis());
+    String maxTimestamp = String.valueOf(current.getMillis());
+
+    List<String> metrics = resultForTotal.getMetrics();
+    for (int i = 0; i < metrics.size(); i++) {
+      Map<String, Number> map = new HashMap<String, Number>();
+
+      String metric = metrics.get(i);
+      double baselineTotal = totalForMetric.get(minTimestamp)[i].doubleValue();
+      double currentTotal = totalForMetric.get(maxTimestamp)[i].doubleValue();
+
+      map.put(Stat.BASELINE_TOTAL.toString(), baselineTotal);
+      map.put(Stat.CURRENT_TOTAL.toString(), currentTotal);
+
+      double delta = currentTotal - baselineTotal;
+      map.put(Stat.DELTA_ABSOLUTE_CHANGE.toString(), delta);
+
+      if (baselineTotal > 0) {
+        map.put(Stat.DELTA_PERCENT_CHANGE.toString(), (delta / baselineTotal) * 100.0);
+      }
+      metricGlobalStats.put(metric, map);
+
+    }
+
+    return metricGlobalStats;
   }
 
   private List<HeatMap> generateHeatMaps(String dimension, QueryResult queryResult)
@@ -100,27 +157,6 @@ public class DimensionViewHeatMap extends View {
     for (String metricName : queryResult.getMetrics()) {
       snapshotValues.put(metricName, new HashSet<String>());
     }
-    /*
-     * try {
-     * String[][] snapshot = SnapshotUtils.snapshot(2, queryResult); // show top 2 movers
-     * for (int i = 0; i < queryResult.getMetrics().size(); i++) {
-     * String[] snapshotCombinations = snapshot[i];
-     * String metricName = queryResult.getMetrics().get(i);
-     * for (String combinationString : snapshotCombinations) {
-     * if (SnapshotUtils.REST.equals(combinationString)) {
-     * continue;
-     * }
-     * List<String> combination = objectMapper.readValue(combinationString.getBytes(),
-     * LIST_TYPE_REFERENCE);
-     * String value = combination.get(dimensionIdx);
-     * snapshotValues.get(metricName).add(value);
-     * }
-     * }
-     * LOGGER.info("snapshotValues={}", snapshotValues);
-     * } catch (Exception e) {
-     * LOGGER.error("Error generating snapshot", e);
-     * }
-     */
 
     // Initialize metric info
     Map<String, List<HeatMapCell>> allCells = new HashMap<>();
@@ -134,31 +170,24 @@ public class DimensionViewHeatMap extends View {
     }
 
     // Aggregate w.r.t. dimension groups
-    Map<List<String>, Map<String, Number[]>> processedResult = ViewUtils.processDimensionGroups(
-        queryResult, objectMapper, dimensionGroupMap, dimensionRegexMap, dimension);
+    Map<List<String>, Map<String, Number[]>> processedResult =
+        ViewUtils.processDimensionGroups(queryResult, objectMapper, dimensionGroupMap,
+            dimensionRegexMap, dimension);
 
     for (Map.Entry<List<String>, Map<String, Number[]>> entry : processedResult.entrySet()) {
       List<String> combination = entry.getKey();
       String value = combination.get(dimensionIdx);
 
       // Find min / max times (for current / baseline)
-      long minTime = -1;
-      long maxTime = -1;
-      for (String timeString : entry.getValue().keySet()) {
-        long time = Long.valueOf(timeString);
-        if (minTime == -1 || time < minTime) {
-          minTime = time;
-        }
-        if (maxTime == -1 || time > maxTime) {
-          maxTime = time;
-        }
-      }
+      String minTime = String.valueOf(baseline.getMillis());
+      String maxTime = String.valueOf(current.getMillis());
 
       // Add local stats
       for (int i = 0; i < queryResult.getMetrics().size(); i++) {
         String metric = queryResult.getMetrics().get(i);
-        Number baselineValue = getMetricValue(entry.getValue().get(String.valueOf(minTime)), i);
-        Number currentValue = getMetricValue(entry.getValue().get(String.valueOf(maxTime)), i);
+        Map<String, Number[]> entryValue = entry.getValue();
+        Number baselineValue = getMetricValue(entryValue.get(minTime), i);
+        Number currentValue = getMetricValue(entryValue.get(maxTime), i);
 
         if (baselineValue == null) {
           baselineValue = new Double(0);
@@ -176,6 +205,8 @@ public class DimensionViewHeatMap extends View {
         allCells.get(metric).add(cell);
       }
     }
+
+    addOtherCategory(queryResult, allCells, allBaselineStats, allCurrentStats);
 
     List<HeatMap> heatMaps = new ArrayList<>();
     for (Map.Entry<String, List<HeatMapCell>> entry : allCells.entrySet()) {
@@ -286,8 +317,8 @@ public class DimensionViewHeatMap extends View {
       }
 
       heatMaps.add(new HeatMap(objectMapper, entry.getKey(), metricAliases.get(entry.getKey()),
-          dimension, dimensionAliases.get(dimension), cells,
-          Arrays.asList(Stat.BASELINE_VALUE.toString(), // 0
+          dimension, dimensionAliases.get(dimension), cells, Arrays.asList(
+              Stat.BASELINE_VALUE.toString(), // 0
               Stat.CURRENT_VALUE.toString(), // 1
               Stat.BASELINE_CDF_VALUE.toString(), // 2
               Stat.CURRENT_CDF_VALUE.toString(), // 3
@@ -299,23 +330,31 @@ public class DimensionViewHeatMap extends View {
               Stat.VOLUME_DIFFERENCE.toString(), // 9
               Stat.SNAPSHOT_CATEGORY.toString(), // 10
               Stat.DELTA_PERCENT_CHANGE.toString() // 11
-      )));
+              )));
     }
+
+    return heatMaps;
+  }
+
+  private void addOtherCategory(QueryResult queryResult, Map<String, List<HeatMapCell>> allCells,
+      Map<String, DescriptiveStatistics> allBaselineStats,
+      Map<String, DescriptiveStatistics> allCurrentStats) {
     for (String metric : queryResult.getMetrics()) {
-      Map<String, Number> map = new HashMap<String, Number>();
       double baselineTotal = allBaselineStats.get(metric).getSum();
       double currentTotal = allCurrentStats.get(metric).getSum();
-      map.put(Stat.BASELINE_TOTAL.toString(), baselineTotal);
 
-      map.put(Stat.CURRENT_TOTAL.toString(), currentTotal);
-      double delta = currentTotal - baselineTotal;
-      map.put(Stat.DELTA_ABSOLUTE_CHANGE.toString(), delta);
-      if (baselineTotal > 0) {
-        map.put(Stat.DELTA_PERCENT_CHANGE.toString(), (delta / baselineTotal) * 100.0);
-      }
-      metricGlobalStats.put(metric, map);
+      HeatMapCell cell = new HeatMapCell(objectMapper, OTHER);
+      double baselineValueOther =
+          metricGlobalStats.get(metric).get(Stat.BASELINE_TOTAL.toString()).doubleValue()
+              - baselineTotal;
+      double currentValueOther =
+          metricGlobalStats.get(metric).get(Stat.CURRENT_TOTAL.toString()).doubleValue()
+              - currentTotal;
+      cell.addStat(Stat.BASELINE_VALUE, (Number) baselineValueOther);
+      cell.addStat(Stat.CURRENT_VALUE, (Number) currentValueOther);
+
+      allCells.get(metric).add(cell);
     }
-    return heatMaps;
   }
 
   private static Number getMetricValue(Number[] metrics, int idx) {

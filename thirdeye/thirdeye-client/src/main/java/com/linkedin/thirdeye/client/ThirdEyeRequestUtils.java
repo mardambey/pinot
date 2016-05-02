@@ -1,12 +1,15 @@
 package com.linkedin.thirdeye.client;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.format.ISODateTimeFormat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
@@ -20,6 +23,7 @@ import com.linkedin.thirdeye.client.ThirdEyeRequest.ThirdEyeRequestBuilder;
 public class ThirdEyeRequestUtils {
 
   private static final Joiner COMMA = Joiner.on(",");
+  private static final ObjectMapper MAPPER = new ObjectMapper();
 
   /**
    * Creates a request from the input parameters, specifying the start of the request as the
@@ -33,17 +37,11 @@ public class ThirdEyeRequestUtils {
     // make the start time more generic
     start = start.withMillisOfDay(0);
     DateTime end = new DateTime(timeRange.getEnd(), DateTimeZone.UTC);
-    String metricFunction = buildMetricFunction(aggregationGranularity, metricNames);
+    ThirdEyeMetricFunction metricFunction =
+        new ThirdEyeMetricFunction(aggregationGranularity, metricNames);
     return new ThirdEyeRequestBuilder().setCollection(collection).setMetricFunction(metricFunction)
-        .setStartTime(start).setEndTime(end).setDimensionValues(fixedDimensionValues)
+        .setStartTimeInclusive(start).setEndTime(end).setDimensionValues(fixedDimensionValues)
         .setGroupBy(groupByDimension).build();
-  }
-
-  // TODO break up metricFunction field in request object and replace with these params.
-  public static String buildMetricFunction(TimeGranularity aggregationGranularity,
-      List<String> metricNames) {
-    return String.format("AGGREGATE_%d_%s(%s)", aggregationGranularity.getSize(),
-        aggregationGranularity.getUnit().toString().toUpperCase(), COMMA.join(metricNames));
   }
 
   /**
@@ -54,8 +52,10 @@ public class ThirdEyeRequestUtils {
   public static Multimap<String, String> expandDimensionGroups(
       Multimap<String, String> dimensionValues,
       Map<String, Multimap<String, String>> dimensionGroups) {
-    if (dimensionValues == null || dimensionGroups == null) {
+    if (dimensionValues == null) {
       return null;
+    } else if (dimensionGroups == null || dimensionGroups.isEmpty()) {
+      return dimensionValues;
     }
     ArrayListMultimap<String, String> map = ArrayListMultimap.create();
     for (String key : dimensionValues.keySet()) {
@@ -81,6 +81,7 @@ public class ThirdEyeRequestUtils {
         }
       }
     }
+    // TODO test case?
     return map;
   }
 
@@ -93,6 +94,41 @@ public class ThirdEyeRequestUtils {
       multimap.put(entry.getKey(), entry.getValue());
     }
     return multimap;
+  }
+
+  // primitive debugging mechanism, ideally meant to consume the printed toString() output and
+  // recreate the results.
+  private static ThirdEyeRequest fromString(String requestObject) throws Exception {
+    // trim outer object
+    requestObject =
+        requestObject.substring(requestObject.indexOf('{') + 1, requestObject.lastIndexOf('}'));
+    ThirdEyeRequestBuilder builder = ThirdEyeRequest.newBuilder();
+    for (String string : requestObject.split(", ")) {
+      String[] split = string.split("=");
+      String property = split[0];
+      String value = split[1];
+      if (property.equals("collection")) {
+        builder.setCollection(value);
+      } else if (property.equals("metricFunction")) {
+        builder.setMetricFunction(value);
+      } else if (property.equals("startTime")) {
+        builder.setStartTimeInclusive(ISODateTimeFormat.dateTimeParser().parseDateTime(value));
+      } else if (property.equals("endTime")) {
+        builder.setEndTime(ISODateTimeFormat.dateTimeParser().parseDateTime(value));
+      } else if (property.equals("dimensionValues")) {
+        // TODO fix to correctly handle multimap inputs
+        builder.setDimensionValues(MAPPER.readValue(value, Map.class));
+      } else if (property.equals("groupBy")) {
+        value = value.replaceAll("[\\[\\]]", "");
+        List<String> names = Arrays.asList(value.split(","));
+        builder.setGroupBy(names);
+      } else if (property.equals("shouldGroupByTime")) {
+        builder.setShouldGroupByTime(Boolean.parseBoolean(value));
+      }
+    }
+
+    return builder.build();
+
   }
 
 }

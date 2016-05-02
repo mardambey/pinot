@@ -35,7 +35,7 @@ import com.linkedin.pinot.common.query.ReduceService;
 import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.common.request.FilterOperator;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -58,7 +58,7 @@ import com.linkedin.pinot.core.operator.query.BAggregationFunctionOperator;
 import com.linkedin.pinot.core.operator.query.MAggregationOperator;
 import com.linkedin.pinot.core.plan.Plan;
 import com.linkedin.pinot.core.plan.PlanNode;
-import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV0;
+import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import com.linkedin.pinot.core.plan.maker.PlanMaker;
 import com.linkedin.pinot.core.query.aggregation.CombineService;
 import com.linkedin.pinot.core.query.reduce.DefaultReduceService;
@@ -105,6 +105,13 @@ public class AggregationQueriesTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    if (_indexSegment != null) {
+      _indexSegment.destroy();
+    }
+    for (SegmentDataManager segmentDataManager : _indexSegmentList) {
+      segmentDataManager.getSegment().destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegment() throws Exception {
@@ -228,7 +235,7 @@ public class AggregationQueriesTest {
   @Test
   public void testInnerSegmentPlanMakerForAggregationFunctionOperatorNoFilter() throws Exception {
     final BrokerRequest brokerRequest = getAggregationNoFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     // UAggregationGroupByOperator operator = (UAggregationGroupByOperator) rootPlanNode.run();
@@ -256,8 +263,8 @@ public class AggregationQueriesTest {
     instanceResponseMap.put(new ServerInstance("localhost:7777"), resultBlock.getAggregationResultDataTable());
     instanceResponseMap.put(new ServerInstance("localhost:8888"), resultBlock.getAggregationResultDataTable());
     instanceResponseMap.put(new ServerInstance("localhost:9999"), resultBlock.getAggregationResultDataTable());
-    final BrokerResponse reducedResults =
-        reduceService.reduceOnDataTable(getAggregationNoFilterBrokerRequest(), instanceResponseMap);
+    final BrokerResponseJSON reducedResults =
+        (BrokerResponseJSON) reduceService.reduceOnDataTable(getAggregationNoFilterBrokerRequest(), instanceResponseMap);
 
     LOGGER.debug("Reduced Result : {}", reducedResults);
   }
@@ -265,7 +272,7 @@ public class AggregationQueriesTest {
   @Test
   public void testInnerSegmentPlanMakerForAggregationFunctionOperatorWithFilter() throws Exception {
     final BrokerRequest brokerRequest = getAggregationWithFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     // UAggregationGroupByOperator operator = (UAggregationGroupByOperator) rootPlanNode.run();
@@ -284,7 +291,7 @@ public class AggregationQueriesTest {
   public void testInterSegmentAggregationFunctionPlanMakerAndRun() throws Exception {
     final int numSegments = 20;
     setupSegmentList(numSegments);
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final BrokerRequest brokerRequest = getAggregationNoFilterBrokerRequest();
     final ExecutorService executorService = Executors.newCachedThreadPool(new NamedThreadFactory("test-plan-maker"));
     final Plan globalPlan =
@@ -297,13 +304,13 @@ public class AggregationQueriesTest {
     final DefaultReduceService defaultReduceService = new DefaultReduceService();
     final Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
-    final BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    final BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     LOGGER.debug("Result : {}", new JSONArray(brokerResponse.getAggregationResults()));
     LOGGER.debug("Time used : {}", brokerResponse.getTimeUsedMs());
     assertBrokerResponse(numSegments, brokerResponse);
   }
 
-  private void assertBrokerResponse(int numSegments, BrokerResponse brokerResponse) throws JSONException {
+  private void assertBrokerResponse(int numSegments, BrokerResponseJSON brokerResponse) throws JSONException {
     Assert.assertEquals(10001 * numSegments, brokerResponse.getNumDocsScanned());
     Assert.assertEquals(_numAggregations, brokerResponse.getAggregationResults().size());
 

@@ -1,6 +1,7 @@
 package com.linkedin.thirdeye.dashboard.resources;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -30,6 +31,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Joiner;
 import com.google.common.collect.Multimap;
 import com.linkedin.thirdeye.api.SegmentDescriptor;
+import com.linkedin.thirdeye.client.ThirdEyeMetricFunction;
 import com.linkedin.thirdeye.client.ThirdEyeRequest;
 import com.linkedin.thirdeye.client.ThirdEyeRequest.ThirdEyeRequestBuilder;
 import com.linkedin.thirdeye.client.ThirdEyeRequestUtils;
@@ -60,6 +62,7 @@ public class DashboardResource {
   static final Logger LOGGER = LoggerFactory.getLogger(DashboardResource.class);
 
   private static final Joiner PATH_JOINER = Joiner.on("/");
+  private static final int HEATMAP_GROUP_COUNT = 25;
 
   private final String feedbackEmailAddress;
   private final DataCache dataCache;
@@ -127,7 +130,9 @@ public class DashboardResource {
     // Get segment metadata
     List<SegmentDescriptor> segments = dataCache.getSegmentDescriptors(collection);
     if (segments.isEmpty()) {
-      throw new NotFoundException("No data loaded in server for " + collection);
+
+      throw new NotFoundException("No data available for " + collection
+          + ". Selectable collections are " + dataCache.getCollections());
     }
 
     // Find the latest and earliest data times
@@ -172,7 +177,7 @@ public class DashboardResource {
   @Path("/dashboard/{collection}/{metricFunction}")
   public Response getDashboardView(@PathParam("collection") String collection,
       @PathParam("metricFunction") String metricFunction, @Context UriInfo uriInfo)
-          throws Exception {
+      throws Exception {
     // TODO check if this is being used outside of dashboard (not used on main page)
     return Response.seeOther(URI.create(PATH_JOINER.join("", "dashboard", collection,
         metricFunction, MetricViewType.INTRA_DAY, DimensionViewType.HEAT_MAP))).build();
@@ -185,7 +190,7 @@ public class DashboardResource {
       @PathParam("metricViewType") MetricViewType metricViewType,
       @PathParam("dimensionViewType") DimensionViewType dimensionViewType,
       @PathParam("baselineOffsetMillis") Long baselineOffsetMillis, @Context UriInfo uriInfo)
-          throws Exception {
+      throws Exception {
     // TODO check if this is being used outside of dashboard (not used on main page)
     // Get segment metadata
     List<SegmentDescriptor> segments = dataCache.getSegmentDescriptors(collection);
@@ -286,11 +291,9 @@ public class DashboardResource {
           new DimensionView(dimensionView, dimensionViewType, dimensionValueOptions),
           earliestDataTime, latestDataTime, customDashboardNames, feedbackEmailAddress, funnelNames,
           dashboardConfigResource);
+    } catch (WebApplicationException e) {
+      throw e;// sends appropriate HTTP response
     } catch (Exception e) {
-      if (e instanceof WebApplicationException) {
-        throw e; // sends appropriate HTTP response
-      }
-
       // TODO: Better message, but at least this propagates it to client
       LOGGER.error("Error processing request {}", uriInfo.getRequestUri(), e);
       return new ExceptionView(e);
@@ -312,7 +315,7 @@ public class DashboardResource {
   private View getDimensionView(String collection, String metricFunction,
       DimensionViewType dimensionViewType, Long baselineMillis, Long currentMillis,
       Multimap<String, String> selectedDimensions, String funnels, UriInfo uriInfo)
-          throws Exception {
+      throws Exception {
     CollectionSchema schema = dataCache.getCollectionSchema(collection);
     DateTime baseline = new DateTime(baselineMillis);
     DateTime current = new DateTime(currentMillis);
@@ -333,24 +336,60 @@ public class DashboardResource {
           selectedDimensions, viewDimensions, baseline, current, reverseDimensionGroups);
 
     case HEAT_MAP:
-      Map<String, Future<QueryResult>> resultActualFutures = new HashMap<>();
+      Map<String, List<Future<QueryResult>>> resultActualFutures = new HashMap<>();
       // TODO separate this into two requests for the current + baseline period only (eg 2 days
       // instead of a full week)
       Multimap<String, String> expandedDimensionValues =
           ThirdEyeRequestUtils.expandDimensionGroups(selectedDimensions, reverseDimensionGroups);
+
+      ThirdEyeMetricFunction thirdEyeMetricFunction =
+          ThirdEyeMetricFunction.fromStr(metricFunction);
+      long bucketSize = thirdEyeMetricFunction.getTimeGranularity().toMillis();
+      DateTime baselineStart = baseline;
+      DateTime baselineEnd = baseline.plus(bucketSize);
+      DateTime currentStart = current;
+      DateTime currentEnd = current.plus(bucketSize);
+
       for (String dimension : schema.getDimensions()) {
         if (!selectedDimensions.containsKey(dimension)) {
           // Generate SQL
-          ThirdEyeRequest req = new ThirdEyeRequestBuilder().setCollection(collection)
-              .setMetricFunction(metricFunction).setStartTime(baseline).setEndTime(current)
-              .setDimensionValues(expandedDimensionValues).setGroupBy(dimension).build();
+          ThirdEyeRequest baseLineReq = new ThirdEyeRequestBuilder().setCollection(collection)
+              .setMetricFunction(thirdEyeMetricFunction).setDimensionValues(expandedDimensionValues)
+              .setGroupBy(dimension).setStartTimeInclusive(baselineStart).setEndTime(baselineEnd)
+              .setTopCount(HEATMAP_GROUP_COUNT).build();
 
-          LOGGER.info("Generated request for heat map: {}", req);
+          ThirdEyeRequest currentReq = new ThirdEyeRequestBuilder().setCollection(collection)
+              .setMetricFunction(thirdEyeMetricFunction).setDimensionValues(expandedDimensionValues)
+              .setGroupBy(dimension).setTopCount(HEATMAP_GROUP_COUNT).setStartTimeInclusive(currentStart)
+              .setEndTime(currentEnd).build();
 
           // Query (in parallel)
-          resultActualFutures.put(dimension, queryCache.getQueryResultAsync(req));
+          ArrayList<Future<QueryResult>> futures = new ArrayList<>();
+          futures.add(queryCache.getQueryResultAsync(baseLineReq));
+          futures.add(queryCache.getQueryResultAsync(currentReq));
+          LOGGER.info("Generated request for heat map, dimension: {}, request: {}", dimension,
+              baseLineReq);
+          LOGGER.info("Generated request for heat map: dimension: {}, request: {}", dimension,
+              currentReq);
+          resultActualFutures.put(dimension, futures);
         }
       }
+
+      List<Future<QueryResult>> resultFuturesForTotal = new ArrayList<>(2);
+
+      ThirdEyeRequest baselineReqForTotal = new ThirdEyeRequestBuilder().setCollection(collection)
+          .setMetricFunction(thirdEyeMetricFunction).setDimensionValues(expandedDimensionValues)
+          .setStartTimeInclusive(baselineStart).setEndTime(baselineEnd).build();
+
+      ThirdEyeRequest currentReqForTotal = new ThirdEyeRequestBuilder().setCollection(collection)
+          .setMetricFunction(thirdEyeMetricFunction).setDimensionValues(expandedDimensionValues)
+          .setStartTimeInclusive(currentStart).setEndTime(currentEnd).build();
+
+      LOGGER.info("Generated Total request for heat map: {}", baselineReqForTotal);
+      LOGGER.info("Generated Total request for heat map: {}", currentReqForTotal);
+
+      resultFuturesForTotal.add(queryCache.getQueryResultAsync(baselineReqForTotal));
+      resultFuturesForTotal.add(queryCache.getQueryResultAsync(currentReqForTotal));
 
       // Get the possible dimension groups
       Map<String, Map<String, String>> dimensionGroups = null;
@@ -361,16 +400,15 @@ public class DashboardResource {
         dimensionRegex = groupSpec.getRegexMapping();
       }
 
-      // // Wait for all queries
-      Map<String, QueryResult> actualResults = QueryUtils.waitForQueries(resultActualFutures);
-      // Map<String, QueryResult> currentResults = QueryUtils.waitForQueries(resultCurrentFutures);
-      // Map<String, QueryResult> baselineResults =
-      // QueryUtils.waitForQueries(resultBaselineFutures);
-      // Map<String, QueryResult> mergedResults =
-      // QueryUtils.mergeQueryMaps(currentResults, baselineResults);
+      // Wait for all queries
+      Map<String, QueryResult> actualResults =
+          QueryUtils.waitForAndMergeMultipleResults(resultActualFutures);
 
-      return new DimensionViewHeatMap(schema, objectMapper, actualResults, dimensionGroups,
-          dimensionRegex);
+      QueryResult resultForTotal = QueryUtils.waitForAndMergeMultipleResults(resultFuturesForTotal);
+
+      DimensionViewHeatMap dimensionViewHeatMap = new DimensionViewHeatMap(schema, objectMapper,
+          actualResults, dimensionGroups, dimensionRegex, baseline, current, resultForTotal);
+      return dimensionViewHeatMap;
     case TABULAR:
       List<FunnelTable> funnelTables = funnelResource.computeFunnelViews(collection, metricFunction,
           funnels, baselineMillis, currentMillis, selectedDimensions);

@@ -24,7 +24,6 @@ import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
-
 import org.apache.helix.HelixAdmin;
 import org.apache.helix.HelixManager;
 import org.apache.helix.ZNRecord;
@@ -34,11 +33,9 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import com.linkedin.pinot.common.utils.ZkStarter;
 import com.linkedin.pinot.controller.ControllerConf;
 import com.linkedin.pinot.controller.ControllerStarter;
-import com.linkedin.pinot.core.util.trace.TraceContext;
 
 
 /**
@@ -58,23 +55,16 @@ public abstract class ControllerTest {
   protected HelixManager _helixZkManager;
   private ZkStarter.ZookeeperInstance _zookeeperInstance;
 
-  public JSONObject postQuery(String query, String brokerBaseApiUrl, boolean usePql2Compiler) throws Exception {
+  public JSONObject postQuery(String query, String brokerBaseApiUrl) throws Exception {
     final JSONObject json = new JSONObject();
     json.put("pql", query);
     json.put("trace", isTraceEnabled);
-
-    if (usePql2Compiler) {
-      json.put("dialect", "pql2");
-    } else {
-      json.put("dialect", "bql");
-    }
 
     final long start = System.currentTimeMillis();
     final URLConnection conn = new URL(brokerBaseApiUrl + "/query").openConnection();
     conn.setDoOutput(true);
     final BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(conn.getOutputStream(), "UTF-8"));
     final String reqStr = json.toString();
-    System.out.println("reqStr = " + reqStr);
 
     writer.write(reqStr, 0, reqStr.length());
     writer.flush();
@@ -88,10 +78,9 @@ public abstract class ControllerTest {
 
     final long stop = System.currentTimeMillis();
 
-    LOGGER.info(" Time take for Request : " + query + " in ms:" + (stop - start));
+    LOGGER.debug("Time taken for '{}':{}ms", query, (stop - start));
 
     final String res = sb.toString();
-    System.out.println("res = " + res);
     final JSONObject ret = new JSONObject(res);
     ret.put("totalTime", (stop - start));
 
@@ -99,7 +88,7 @@ public abstract class ControllerTest {
   }
 
   public JSONObject postQuery(String query) throws Exception {
-    return postQuery(query, BROKER_BASE_API_URL, true);
+    return postQuery(query, BROKER_BASE_API_URL);
   }
 
   protected void startZk() {
@@ -107,7 +96,11 @@ public abstract class ControllerTest {
   }
 
   protected void stopZk() {
-    ZkStarter.stopLocalZkServer(_zookeeperInstance);
+    try {
+      ZkStarter.stopLocalZkServer(_zookeeperInstance);
+    } catch (Exception e) {
+      // Swallow exceptions
+    }
   }
 
   /**

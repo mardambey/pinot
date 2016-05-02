@@ -20,37 +20,39 @@ import com.linkedin.pinot.core.common.BlockDocIdIterator;
 import com.linkedin.pinot.core.common.BlockId;
 import com.linkedin.pinot.core.common.Constants;
 import com.linkedin.pinot.core.common.Operator;
-import com.linkedin.pinot.core.operator.blocks.MatchEntireSegmentDocIdSetBlock;
 import com.linkedin.pinot.core.operator.docidsets.DocIdSetBlock;
-
+import com.linkedin.pinot.core.plan.DocIdSetPlanNode;
 
 /**
  * BReusableFilteredDocIdSetOperator will take a filter Operator and get the matched docId set.
  * Internally, cached a given size of docIds, so this Operator could be replicated
  * for many ColumnarReaderDataSource.
- *
- *
  */
 public class BReusableFilteredDocIdSetOperator extends BaseOperator {
 
   private final Operator _filterOperator;
-  private final int _docSize;
   private BlockDocIdIterator _currentBlockDocIdIterator;
   private Block _currentBlock;
-  private DocIdSetBlock _currentDocIdSetBlock;
   private int _currentDoc = 0;
   private final int _maxSizeOfdocIdSet;
-  private final int[] _docIdArray;
-  private int _pos = 0;
-  private int _searchableDocIdSize = 0;
   boolean inited = false;
+  private static final ThreadLocal<int[]> DOC_ID_ARRAY = new ThreadLocal<int[]>() {
+    @Override
+    protected int[] initialValue() {
+      return new int[DocIdSetPlanNode.MAX_DOC_PER_CALL];
+    }
+  };
 
-  public BReusableFilteredDocIdSetOperator(Operator filterOperator, int docSize, int maxSizeOfdocIdSet) {
-    _maxSizeOfdocIdSet = maxSizeOfdocIdSet;
-    _docIdArray = new int[_maxSizeOfdocIdSet];
+  /**
+   * @param filterOperator
+   * @param docSize
+   * @param maxSizeOfdocIdSet must be less than {@link DocIdSetPlanNode}. MAX_DOC_PER_CALL which is
+   *          10000
+   */
+  public BReusableFilteredDocIdSetOperator(Operator filterOperator, int docSize,
+      int maxSizeOfdocIdSet) {
+    _maxSizeOfdocIdSet = Math.min(maxSizeOfdocIdSet, DocIdSetPlanNode.MAX_DOC_PER_CALL);
     _filterOperator = filterOperator;
-    _docSize = docSize;
-
   }
 
   @Override
@@ -61,36 +63,31 @@ public class BReusableFilteredDocIdSetOperator extends BaseOperator {
 
   @Override
   public Block getNextBlock() {
-
-    // [PINOT-2420] Handle limit 0 clause safely.
+    // Handle limit 0 clause safely.
     // For limit 0, _docIdArray will be zero sized
     if (_currentDoc == Constants.EOF) {
       return null;
     }
+    int[] docIdArray = DOC_ID_ARRAY.get();
     if (!inited) {
       inited = true;
       _currentDoc = 0;
       _currentBlock = _filterOperator.nextBlock();
       _currentBlockDocIdIterator = _currentBlock.getBlockDocIdSet().iterator();
     }
-    _pos = 0;
-    getNextDoc();
-    while (_currentDoc != Constants.EOF) {
-      _docIdArray[_pos++] = _currentDoc;
-      if (_pos == _maxSizeOfdocIdSet) {
-        _searchableDocIdSize = _pos;
-        _currentDocIdSetBlock = new DocIdSetBlock(_docIdArray, _pos);
-        return _currentDocIdSetBlock;
+    int pos = 0;
+    for (int i = 0; i < _maxSizeOfdocIdSet; i++) {
+      _currentDoc = _currentBlockDocIdIterator.next();
+      if (_currentDoc == Constants.EOF) {
+        break;
       }
-      getNextDoc();
+      docIdArray[pos++] = _currentDoc;
     }
-    if (_pos > 0) {
-      _searchableDocIdSize = _pos;
-      _currentDocIdSetBlock = new DocIdSetBlock(_docIdArray, _pos);
-      return _currentDocIdSetBlock;
+    DocIdSetBlock docIdSetBlock = null;
+    if (pos > 0) {
+      docIdSetBlock = new DocIdSetBlock(docIdArray, pos);
     }
-    _currentDocIdSetBlock = null;
-    return _currentDocIdSetBlock;
+    return docIdSetBlock;
   }
 
   @Override
@@ -103,43 +100,10 @@ public class BReusableFilteredDocIdSetOperator extends BaseOperator {
     return "BReusableFilteredDocIdSetOperator";
   }
 
-  public Block getCurrentBlock() {
-    return _currentBlock;
-  }
-
-  public DocIdSetBlock getCurrentDocIdSetBlock() {
-    return _currentDocIdSetBlock;
-  }
-
-  private int getNextDoc() {
-    if (_currentDoc == Constants.EOF) {
-      return _currentDoc;
-    }
-    while ((_currentBlockDocIdIterator == null)
-        || ((_currentDoc = _currentBlockDocIdIterator.next()) == Constants.EOF)) {
-      if (_filterOperator != null) {
-        _currentBlock = _filterOperator.nextBlock();
-      } else {
-        if (_currentDoc == Constants.EOF) {
-          _currentBlock = null;
-        }
-      }
-      if (_currentBlock == null) {
-        return Constants.EOF;
-      }
-      _currentBlockDocIdIterator = _currentBlock.getBlockDocIdSet().iterator();
-    }
-    return _currentDoc;
-  }
-
   @Override
   public boolean close() {
     _filterOperator.close();
     return true;
-  }
-
-  public long getCurrentBlockSize() {
-    return _searchableDocIdSize;
   }
 
 }

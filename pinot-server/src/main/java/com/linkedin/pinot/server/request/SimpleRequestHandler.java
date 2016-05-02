@@ -56,7 +56,7 @@ public class SimpleRequestHandler implements RequestHandler {
   public byte[] processRequest(ByteBuf request) {
 
     long queryStartTime = System.nanoTime();
-    _serverMetrics.addMeteredValue(null, ServerMeter.QUERIES, 1);
+    _serverMetrics.addMeteredGlobalValue(ServerMeter.QUERIES, 1);
 
     LOGGER.debug("processing request : {}", request);
 
@@ -71,8 +71,7 @@ public class SimpleRequestHandler implements RequestHandler {
       serDe.deserialize(queryRequest, byteArray);
       long deserRequestTime = System.nanoTime();
       _serverMetrics.addPhaseTiming(brokerRequest, ServerQueryPhase.REQUEST_DESERIALIZATION, deserRequestTime - queryStartTime);
-      LOGGER.info("Processing requestId:{},numSegmentsToSearch={}", queryRequest.getRequestId(), queryRequest.getSearchSegmentsSize());
-      LOGGER.debug("instance request : {}", queryRequest);
+      LOGGER.debug("Processing requestId:{},request={}", queryRequest.getRequestId(), queryRequest);
       brokerRequest = queryRequest.getQuery();
 
       long startTime = System.nanoTime();
@@ -81,7 +80,7 @@ public class SimpleRequestHandler implements RequestHandler {
       _serverMetrics.addPhaseTiming(brokerRequest, ServerQueryPhase.QUERY_PROCESSING, totalNanos);
     } catch (Exception e) {
       LOGGER.error("Got exception while processing request. Returning error response", e);
-      _serverMetrics.addMeteredValue(null, ServerMeter.UNCAUGHT_EXCEPTIONS, 1);
+      _serverMetrics.addMeteredGlobalValue(ServerMeter.UNCAUGHT_EXCEPTIONS, 1);
       DataTableBuilder dataTableBuilder = new DataTableBuilder(null);
       List<ProcessingException> exceptions = new ArrayList<ProcessingException>();
       ProcessingException exception = QueryException.INTERNAL_ERROR.deepCopy();
@@ -100,7 +99,7 @@ public class SimpleRequestHandler implements RequestHandler {
         responseByte = instanceResponse.toBytes();
       }
     } catch (Exception e) {
-      _serverMetrics.addMeteredValue(null, ServerMeter.RESPONSE_SERIALIZATION_EXCEPTIONS, 1);
+      _serverMetrics.addMeteredGlobalValue(ServerMeter.RESPONSE_SERIALIZATION_EXCEPTIONS, 1);
       LOGGER.error("Got exception while serializing response.", e);
       responseByte = null;
     }

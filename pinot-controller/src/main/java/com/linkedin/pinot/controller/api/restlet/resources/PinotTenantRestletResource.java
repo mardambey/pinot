@@ -18,7 +18,8 @@ package com.linkedin.pinot.controller.api.restlet.resources;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.apache.commons.lang3.exception.ExceptionUtils;
+import com.linkedin.pinot.common.metrics.ControllerMeter;
+import com.linkedin.pinot.controller.api.ControllerRestApplication;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.restlet.data.MediaType;
@@ -37,12 +38,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.io.ByteStreams;
 import com.linkedin.pinot.common.config.Tenant;
 import com.linkedin.pinot.common.utils.TenantRole;
-import com.linkedin.pinot.controller.api.swagger.Description;
-import com.linkedin.pinot.controller.api.swagger.HttpVerb;
-import com.linkedin.pinot.controller.api.swagger.Parameter;
-import com.linkedin.pinot.controller.api.swagger.Paths;
-import com.linkedin.pinot.controller.api.swagger.Summary;
-import com.linkedin.pinot.controller.api.swagger.Tags;
+import com.linkedin.pinot.common.restlet.swagger.Description;
+import com.linkedin.pinot.common.restlet.swagger.HttpVerb;
+import com.linkedin.pinot.common.restlet.swagger.Parameter;
+import com.linkedin.pinot.common.restlet.swagger.Paths;
+import com.linkedin.pinot.common.restlet.swagger.Summary;
+import com.linkedin.pinot.common.restlet.swagger.Tags;
 import com.linkedin.pinot.controller.helix.core.PinotResourceManagerResponse;
 import com.linkedin.pinot.controller.helix.core.PinotResourceManagerResponse.ResponseStatus;
 
@@ -67,7 +68,7 @@ import com.linkedin.pinot.controller.helix.core.PinotResourceManagerResponse.Res
  *    }' http://lva1-pinot-controller-vip-1.corp.linkedin.com:11984/tenants
  */
 
-public class PinotTenantRestletResource extends PinotRestletResourceBase {
+public class PinotTenantRestletResource extends BasePinotControllerRestletResource {
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotTenantRestletResource.class);
 
   private static final String TENANT_NAME = "tenantName";
@@ -94,6 +95,7 @@ public class PinotTenantRestletResource extends PinotRestletResourceBase {
     } catch (final Exception e) {
       presentation = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception while creating tenant ", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_TENANT_CREATE_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     }
     return presentation;
@@ -134,6 +136,7 @@ public class PinotTenantRestletResource extends PinotRestletResourceBase {
     } catch (final Exception e) {
       presentation = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception while updating tenant ", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_TENANT_UPDATE_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     }
     return presentation;
@@ -196,6 +199,7 @@ public class PinotTenantRestletResource extends PinotRestletResourceBase {
       }
     } catch (final Exception e) {
       presentation = exceptionToStringRepresentation(e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_TENANT_GET_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
       LOGGER.error("Caught exception while fetching tenant ", e);
       setStatus(Status.SERVER_ERROR_INTERNAL);
@@ -310,6 +314,7 @@ public class PinotTenantRestletResource extends PinotRestletResourceBase {
     } catch (final Exception e) {
       presentation = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception while deleting tenant ", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_TABLE_TENANT_DELETE_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     }
     return presentation;

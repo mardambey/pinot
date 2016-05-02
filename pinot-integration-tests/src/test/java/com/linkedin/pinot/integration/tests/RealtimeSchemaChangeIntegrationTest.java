@@ -16,8 +16,6 @@
 
 package com.linkedin.pinot.integration.tests;
 
-import com.google.common.util.concurrent.Uninterruptibles;
-import com.linkedin.pinot.common.data.Schema;
 import java.io.File;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
@@ -26,6 +24,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.Test;
+import com.google.common.util.concurrent.Uninterruptibles;
+import com.linkedin.pinot.common.data.Schema;
 
 
 /**
@@ -34,7 +34,7 @@ import org.testng.annotations.Test;
 public class RealtimeSchemaChangeIntegrationTest extends RealtimeClusterIntegrationTest {
   private static final Logger LOGGER = LoggerFactory.getLogger(RealtimeSchemaChangeIntegrationTest.class);
 
-  public File getPartialSchemaFile() {
+  private File getPartialSchemaFile() {
     return new File(OfflineClusterIntegrationTest.class.getClassLoader()
         .getResource("On_Time_On_Time_Performance_2014_100k_subset_nonulls_missing_columns.schema").getFile());
   }
@@ -47,7 +47,7 @@ public class RealtimeSchemaChangeIntegrationTest extends RealtimeClusterIntegrat
 
     // Create the table with a different schema than the final one
     addRealtimeTable(tableName, timeColumnName, timeColumnType, 900, "Days", kafkaZkUrl, kafkaTopic,
-        schema.getSchemaName(), null, null, avroFile, ROW_COUNT_FOR_REALTIME_SEGMENT_FLUSH);
+        schema.getSchemaName(), null, null, avroFile, ROW_COUNT_FOR_REALTIME_SEGMENT_FLUSH, "Carrier");
 
     // Sleep for a little bit to get some events in the realtime table
     Uninterruptibles.sleepUninterruptibly(15L, TimeUnit.SECONDS);
@@ -56,7 +56,7 @@ public class RealtimeSchemaChangeIntegrationTest extends RealtimeClusterIntegrat
     updateSchema(schemaFile, schema.getSchemaName());
   }
 
-  @Test
+  @Test(enabled = false)
   public void testForColumnPartialPresence() throws Exception {
     // Count the number of rows
     JSONObject response = postQuery("select count(*) from 'mytable'");
@@ -80,26 +80,31 @@ public class RealtimeSchemaChangeIntegrationTest extends RealtimeClusterIntegrat
   }
 
   @Override
+  @Test(enabled = false)
   public void testHardcodedQuerySet() throws Exception {
     // Ignored
   }
 
   @Override
+  @Test(enabled = false)
   public void testGeneratedQueries() throws Exception {
     // Ignored
   }
 
   @Override
+  @Test(enabled = false)
   public void testSingleQuery() throws Exception {
     // Ignored
   }
 
   @Override
+  @Test(enabled = false)
   public void testMultipleQueries() throws Exception {
     // Ignored
   }
 
   @Override
+  @Test(enabled = false)
   public void testGeneratedQueriesWithMultivalues() throws Exception {
     // Ignored
   }

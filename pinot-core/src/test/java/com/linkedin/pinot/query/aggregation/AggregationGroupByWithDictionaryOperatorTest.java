@@ -40,7 +40,7 @@ import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.common.request.FilterOperator;
 import com.linkedin.pinot.common.request.GroupBy;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -114,6 +114,13 @@ public class AggregationGroupByWithDictionaryOperatorTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    if (_indexSegment != null) {
+      _indexSegment.destroy();
+    }
+    for (SegmentDataManager segmentDataManager : _indexSegmentList) {
+      segmentDataManager.getSegment().destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegmentList(int numberOfSegments) throws Exception {
@@ -402,12 +409,12 @@ public class AggregationGroupByWithDictionaryOperatorTest {
     setupSegmentList(numSegments);
     final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final BrokerRequest brokerRequest = getAggregationGroupByNoFilterBrokerRequest();
-    final BrokerResponse brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
+    final BrokerResponseJSON brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
 
     assertBrokerResponse(numSegments, brokerResponse);
   }
 
-  private BrokerResponse getBrokerResponse(PlanMaker instancePlanMaker, BrokerRequest brokerRequest) {
+  private BrokerResponseJSON getBrokerResponse(PlanMaker instancePlanMaker, BrokerRequest brokerRequest) {
     final ExecutorService executorService = Executors.newCachedThreadPool(new NamedThreadFactory("test-plan-maker"));
     final Plan globalPlan =
         instancePlanMaker.makeInterSegmentPlan(_indexSegmentList, brokerRequest, executorService, 150000);
@@ -420,7 +427,7 @@ public class AggregationGroupByWithDictionaryOperatorTest {
     final DefaultReduceService defaultReduceService = new DefaultReduceService();
     final Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
-    final BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    final BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     LOGGER.debug("broker Response: {}", new JSONArray(brokerResponse.getAggregationResults()));
     LOGGER.debug("Time used : {}", brokerResponse.getTimeUsedMs());
     return brokerResponse;
@@ -432,11 +439,11 @@ public class AggregationGroupByWithDictionaryOperatorTest {
     setupSegmentList(numSegments);
     final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final BrokerRequest brokerRequest = getAggregationGroupByWithEmptyFilterBrokerRequest();
-    final BrokerResponse brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
+    final BrokerResponseJSON brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
     assertEmptyBrokerResponse(brokerResponse);
   }
 
-  private void assertBrokerResponse(int numSegments, BrokerResponse brokerResponse) throws JSONException {
+  private void assertBrokerResponse(int numSegments, BrokerResponseJSON brokerResponse) throws JSONException {
     Assert.assertEquals(10001 * numSegments, brokerResponse.getNumDocsScanned());
     final int groupSize = 15;
     assertBrokerResponse(brokerResponse, groupSize);
@@ -463,13 +470,13 @@ public class AggregationGroupByWithDictionaryOperatorTest {
 
   }
 
-  private void assertEmptyBrokerResponse(BrokerResponse brokerResponse) throws JSONException {
+  private void assertEmptyBrokerResponse(BrokerResponseJSON brokerResponse) throws JSONException {
     Assert.assertEquals(0, brokerResponse.getNumDocsScanned());
     final int groupSize = 0;
     assertBrokerResponse(brokerResponse, groupSize);
   }
 
-  private void assertBrokerResponse(BrokerResponse brokerResponse, int groupSize)
+  private void assertBrokerResponse(BrokerResponseJSON brokerResponse, int groupSize)
       throws JSONException {
     Assert.assertEquals(_numAggregations, brokerResponse.getAggregationResults().size());
     for (int i = 0; i < _numAggregations; ++i) {

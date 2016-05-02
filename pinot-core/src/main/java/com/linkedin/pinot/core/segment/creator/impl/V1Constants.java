@@ -89,10 +89,14 @@ public class V1Constants {
 
     public static class StarTree {
       public static final String STAR_TREE_ENABLED = "startree.enabled";
-      public static final String SPLIT_ORDER = "startree.split.order";
-      public static final String MAX_LEAF_RECORDS = "startree.max.leaf.records";
-      public static final String SPLIT_EXCLUDES = "startree.split.excludes";
-      public static final String EXCLUDED_DIMENSIONS = "startree.excluded.dimensions";
+      public static final String STAR_TREE_SPLIT_ORDER = "startree.split.order";
+      public static final String STAR_TREE_MAX_LEAF_RECORDS = "startree.max.leaf.records";
+      public static final String STAR_TREE_SKIP_STAR_NODE_CREATION_FOR_DIMENSIONS =
+          "startree.skip.star.node.creation.for.dimensions";
+      public static final String STAR_TREE_SKIP_MATERIALIZATION_FOR_DIMENSIONS =
+          "star.tree.skip.materialization.for.dimensions";
+      public static final String STAR_TREE_SKIP_MATERIALIZATION_CARDINALITY =
+          "star.tree.skip.materialization.cardinality";
     }
 
     public static class Segment {

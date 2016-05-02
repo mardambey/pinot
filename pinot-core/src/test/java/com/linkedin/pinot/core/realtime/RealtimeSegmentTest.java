@@ -15,6 +15,8 @@
  */
 package com.linkedin.pinot.core.realtime;
 
+import com.linkedin.pinot.common.metrics.ServerMetrics;
+import com.yammer.metrics.core.MetricsRegistry;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -78,9 +80,11 @@ public class RealtimeSegmentTest {
     StreamProviderConfig config = new FileBasedStreamProviderConfig(FileFormat.AVRO, filePath, schema);
     System.out.println(config);
     StreamProvider provider = new FileBasedStreamProviderImpl();
-    provider.init(config);
+    final String tableName = RealtimeSegmentTest.class.getSimpleName() + ".noTable";
+    provider.init(config, tableName, new ServerMetrics(new MetricsRegistry()));
 
-    segment = new RealtimeSegmentImpl(schema, 100000);
+    segment = new RealtimeSegmentImpl(schema, 100000, tableName, "noSegment", AVRO_DATA, new ServerMetrics(new
+        MetricsRegistry()));
     GenericRow row = provider.next();
     while (row != null) {
       segment.index(row);
@@ -106,7 +110,7 @@ public class RealtimeSegmentTest {
   public void testMetricPredicate() throws Exception {
     DataSource ds1 = segment.getDataSource("count");
 
-    BitmapBasedFilterOperator op = new BitmapBasedFilterOperator(ds1);
+    BitmapBasedFilterOperator op = new BitmapBasedFilterOperator(ds1, 0, segment.getRawDocumentCount() - 1);
     List<String> rhs = new ArrayList<String>();
     rhs.add("890662862");
     Predicate predicate = new EqPredicate("count", rhs);
@@ -133,7 +137,7 @@ public class RealtimeSegmentTest {
   public void testNoMatchFilteringMetricPredicate() throws Exception {
     DataSource ds1 = segment.getDataSource("count");
 
-    BitmapBasedFilterOperator op = new BitmapBasedFilterOperator(ds1);
+    BitmapBasedFilterOperator op = new BitmapBasedFilterOperator(ds1, 0, segment.getRawDocumentCount() - 1);
     List<String> rhs = new ArrayList<String>();
     rhs.add("890662862");
     Predicate predicate = new NEqPredicate("count", rhs);

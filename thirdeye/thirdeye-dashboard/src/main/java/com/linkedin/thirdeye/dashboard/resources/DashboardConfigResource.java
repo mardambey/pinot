@@ -69,14 +69,16 @@ public class DashboardConfigResource {
   private final ObjectMapper objectMapper;
   private final CollectionMapThirdEyeClient clientMap;
   private final String clientConfigFolder;
+  private final FunnelsDataProvider funnelsProvider;
 
   public DashboardConfigResource(DataCache dataCache, QueryCache queryCache,
       CollectionMapThirdEyeClient clientMap, String clientConfigFilePath,
-      ObjectMapper objectMapper) {
+      FunnelsDataProvider funnelsProvider, ObjectMapper objectMapper) {
     this.dataCache = dataCache;
     this.queryCache = queryCache;
     this.clientMap = clientMap;
     this.clientConfigFolder = clientConfigFilePath;
+    this.funnelsProvider = funnelsProvider;
     this.objectMapper = objectMapper;
   }
 
@@ -149,7 +151,7 @@ public class DashboardConfigResource {
       @PathParam("current") long currentMillis,
       @DefaultValue(DIMENSION_VALUES_OPTIONS_THRESHOLD) @QueryParam("threshold") double contributionThreshold,
       @DefaultValue(DIMENSION_VALUES_LIMIT) @QueryParam("limit") int dimensionValuesLimit)
-          throws Exception {
+      throws Exception {
     return retrieveDimensionValues(collection, baselineMillis, currentMillis, contributionThreshold,
         dimensionValuesLimit);
   }
@@ -211,32 +213,64 @@ public class DashboardConfigResource {
         METRIC_FUNCTION_JOINER.join(metrics));
 
     Multimap<String, String> dimensionValues = LinkedListMultimap.create();
-    Map<String, Future<QueryResult>> resultFutures = new HashMap<>();
+    Map<String, List<Future<QueryResult>>> resultFutures = new HashMap<>();
     // query w/ group by for each dimension.
     for (String dimension : dimensions) {
-      // Generate request
-      ThirdEyeRequest req = new ThirdEyeRequestBuilder().setCollection(collection)
-          .setMetricFunction(dummyFunction).setStartTime(baseline).setEndTime(current)
-          .setDimensionValues(dimensionValues).setGroupBy(dimension).build();
-      LOGGER.info("Generated request for dimension retrieval: {}", req);
+      ArrayList<Future<QueryResult>> futures = new ArrayList<>();
+
+      // Generate requests
+      ThirdEyeRequest req1 = new ThirdEyeRequestBuilder().setCollection(collection)
+          .setMetricFunction(dummyFunction).setStartTimeInclusive(baseline).setEndTime(baseline.plusDays(1))
+          .setDimensionValues(dimensionValues).setGroupBy(dimension).setShouldGroupByTime(false)
+          .build();
+      LOGGER.info("Generated request for dimension retrieval: {}", req1);
+      futures.add(queryCache.getQueryResultAsync(req1));
+
+      ThirdEyeRequest req2 = new ThirdEyeRequestBuilder().setCollection(collection)
+          .setMetricFunction(dummyFunction).setStartTimeInclusive(current.minusDays(1)).setEndTime(current)
+          .setDimensionValues(dimensionValues).setGroupBy(dimension).setShouldGroupByTime(false)
+          .build();
+      LOGGER.info("Generated request for dimension retrieval: {}", req2);
+      futures.add(queryCache.getQueryResultAsync(req2));
 
       // Query (in parallel)
-      resultFutures.put(dimension, queryCache.getQueryResultAsync(req));
+      resultFutures.put(dimension, futures);
     }
 
     Map<String, Collection<String>> collectedDimensionValues = new HashMap<>();
     // Wait for all queries and generate the ordered list from the result.
     for (int i = 0; i < dimensions.size(); i++) {
       String dimension = dimensions.get(i);
-      QueryResult queryResult = resultFutures.get(dimension).get();
 
       // Sum up hourly data over entire dataset for each dimension combination
       int metricCount = metrics.size();
       double[] total = new double[metricCount];
       Map<String, double[]> summedValues = new HashMap<>();
+      QueryResult mergedQueryResult = new QueryResult();
+
+      boolean inited = false;
+      for (Future<QueryResult> futureQueryResult : resultFutures.get(dimension)) {
+        QueryResult queryResult = futureQueryResult.get();
+        if (!inited) {
+          mergedQueryResult.setDimensions(queryResult.getDimensions());
+          mergedQueryResult.setMetrics(queryResult.getMetrics());
+          mergedQueryResult.setData(new HashMap<>(queryResult.getData()));
+          inited = true;
+        } else {
+          for (String dimValue : queryResult.getData().keySet()) {
+            if (mergedQueryResult.getData().containsKey(dimValue)) {
+              mergedQueryResult.getData().get(dimValue).putAll(queryResult.getData().get(dimValue));
+            }
+            mergedQueryResult.getData().put(dimValue, queryResult.getData().get(dimValue));
+          }
+        }
+      }
+
+      QueryResult queryResult = mergedQueryResult;
 
       for (Map.Entry<String, Map<String, Number[]>> entry : queryResult.getData().entrySet()) {
         double[] sum = new double[metricCount];
+
         for (Map.Entry<String, Number[]> hourlyEntry : entry.getValue().entrySet()) {
           for (int j = 0; j < metricCount; j++) {
             double value = hourlyEntry.getValue()[j].doubleValue();
@@ -244,6 +278,7 @@ public class DashboardConfigResource {
           }
         }
         summedValues.put(entry.getKey(), sum);
+
         // update total w/ sums for each dimension value.
         for (int j = 0; j < metricCount; j++) {
           total[j] += sum[j];
@@ -321,7 +356,7 @@ public class DashboardConfigResource {
       @PathParam("current") long currentMillis,
       @DefaultValue(DIMENSION_VALUES_OPTIONS_THRESHOLD) @QueryParam("threshold") double contributionThreshold,
       @DefaultValue(DIMENSION_VALUES_LIMIT) @QueryParam("limit") int dimensionValuesLimit)
-          throws Exception {
+      throws Exception {
     Map<String, Object> schemaInfo = new HashMap<>();
     schemaInfo.putAll(getDimensionInfo(collection, uriInfo, baselineMillis, currentMillis,
         contributionThreshold, dimensionValuesLimit));
@@ -346,7 +381,7 @@ public class DashboardConfigResource {
       @PathParam("current") long currentMillis,
       @DefaultValue(DIMENSION_VALUES_OPTIONS_THRESHOLD) @QueryParam("threshold") double contributionThreshold,
       @DefaultValue(DIMENSION_VALUES_LIMIT) @QueryParam("limit") int dimensionValuesLimit)
-          throws Exception {
+      throws Exception {
     Map<String, Object> dimensionInfo = new HashMap<>();
     dimensionInfo.put("dimensions", getDimensions(collection, uriInfo));
     dimensionInfo.put("dimensionAliases", getDimensionAliases(collection));
@@ -393,6 +428,9 @@ public class DashboardConfigResource {
   public Response reloadClients() throws Exception {
     LOGGER.info("Reloading client configurations from {}", clientConfigFolder);
     clientMap.reloadFromFolder(clientConfigFolder);
+    if (funnelsProvider != null) {
+      funnelsProvider.loadConfigs();
+    }
     return Response.ok().build();
   }
 

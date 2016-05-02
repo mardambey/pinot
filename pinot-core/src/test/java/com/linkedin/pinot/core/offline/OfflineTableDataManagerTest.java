@@ -15,6 +15,8 @@
  */
 package com.linkedin.pinot.core.offline;
 
+import com.linkedin.pinot.common.metrics.ServerMetrics;
+import com.yammer.metrics.core.MetricsRegistry;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -36,6 +38,7 @@ import org.testng.annotations.Test;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.segment.SegmentMetadata;
 import com.linkedin.pinot.core.data.manager.config.TableDataManagerConfig;
+import com.linkedin.pinot.core.data.manager.offline.AbstractTableDataManager;
 import com.linkedin.pinot.core.data.manager.offline.OfflineSegmentDataManager;
 import com.linkedin.pinot.core.data.manager.offline.OfflineTableDataManager;
 import com.linkedin.pinot.core.data.manager.offline.SegmentDataManager;
@@ -108,9 +111,9 @@ public class OfflineTableDataManagerTest {
       when(config.getReadMode()).thenReturn(readMode.toString());
       when(config.getIndexLoadingConfigMetadata()).thenReturn(null);
     }
-    tableDataManager.init(config);
+    tableDataManager.init(config, new ServerMetrics(new MetricsRegistry()));
     tableDataManager.start();
-    Field segsMapField = OfflineTableDataManager.class.getDeclaredField("_segmentsMap");
+    Field segsMapField = AbstractTableDataManager.class.getDeclaredField("_segmentsMap");
     segsMapField.setAccessible(true);
     _internalSegMap = (Map<String, OfflineSegmentDataManager>)segsMapField.get(tableDataManager);
     return tableDataManager;
@@ -296,7 +299,7 @@ public class OfflineTableDataManagerTest {
   }
 
   private void verifyCount(SegmentDataManager segmentDataManager, int value) throws Exception {
-    Field refcntField = OfflineSegmentDataManager.class.getDeclaredField(refCntFieldName);
+    Field refcntField = SegmentDataManager.class.getDeclaredField(refCntFieldName);
     refcntField.setAccessible(true);
     AtomicInteger refCnt = (AtomicInteger)refcntField.get(segmentDataManager);
     int actualCount = refCnt.get();

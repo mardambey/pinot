@@ -15,11 +15,12 @@
  */
 package com.linkedin.pinot.integration.tests;
 
+import com.linkedin.pinot.common.metrics.ServerMetrics;
+import java.util.Random;
 import com.linkedin.pinot.core.data.GenericRow;
 import com.linkedin.pinot.core.realtime.StreamProvider;
 import com.linkedin.pinot.core.realtime.StreamProviderConfig;
 import com.linkedin.pinot.core.realtime.StreamProviderFactory;
-import java.util.Random;
 
 
 /**
@@ -45,8 +46,9 @@ public class FlakyConsumerRealtimeClusterIntegrationTest extends RealtimeCluster
     }
 
     @Override
-    public void init(StreamProviderConfig streamProviderConfig) throws Exception {
-      _streamProvider.init(streamProviderConfig);
+    public void init(StreamProviderConfig streamProviderConfig, String tableName, ServerMetrics serverMetrics)
+        throws Exception {
+      _streamProvider.init(streamProviderConfig, tableName, serverMetrics);
     }
 
     @Override
@@ -85,7 +87,14 @@ public class FlakyConsumerRealtimeClusterIntegrationTest extends RealtimeCluster
 
     @Override
     public void commit() {
-      _streamProvider.commit();
+      // Fail to commit 50% of the time
+      boolean failToCommit = _random.nextBoolean();
+
+      if (failToCommit) {
+        throw new RuntimeException("Flaky stream provider exception");
+      } else {
+        _streamProvider.commit();
+      }
     }
 
     @Override

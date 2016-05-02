@@ -38,7 +38,7 @@ import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.BrokerRequest;
 import com.linkedin.pinot.common.request.FilterOperator;
 import com.linkedin.pinot.common.request.GroupBy;
-import com.linkedin.pinot.common.response.BrokerResponse;
+import com.linkedin.pinot.common.response.BrokerResponseJSON;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.segment.ReadMode;
 import com.linkedin.pinot.common.utils.DataTable;
@@ -62,7 +62,7 @@ import com.linkedin.pinot.core.operator.query.MAggregationGroupByOperator;
 import com.linkedin.pinot.core.operator.query.MDefaultAggregationFunctionGroupByOperator;
 import com.linkedin.pinot.core.plan.Plan;
 import com.linkedin.pinot.core.plan.PlanNode;
-import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV0;
+import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import com.linkedin.pinot.core.plan.maker.PlanMaker;
 import com.linkedin.pinot.core.query.aggregation.CombineService;
 import com.linkedin.pinot.core.query.aggregation.groupby.AggregationGroupByOperatorService;
@@ -111,6 +111,13 @@ public class AggregationGroupByOperatorForMultiValueTest {
     if (INDEXES_DIR.exists()) {
       FileUtils.deleteQuietly(INDEXES_DIR);
     }
+    if (_indexSegment != null) {
+      _indexSegment.destroy();
+    }
+    for (SegmentDataManager segmentDataManager : _indexSegmentList) {
+      segmentDataManager.getSegment().destroy();
+    }
+    _indexSegmentList.clear();
   }
 
   private void setupSegmentList(int numberOfSegments) throws Exception {
@@ -324,7 +331,7 @@ public class AggregationGroupByOperatorForMultiValueTest {
   @Test
   public void testInnerSegmentPlanMakerForAggregationGroupByOperatorNoFilter() throws Exception {
     final BrokerRequest brokerRequest = getAggregationGroupByNoFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     // UAggregationGroupByOperator operator = (UAggregationGroupByOperator) rootPlanNode.run();
@@ -362,7 +369,7 @@ public class AggregationGroupByOperatorForMultiValueTest {
   @Test
   public void testInnerSegmentPlanMakerForAggregationGroupByOperatorWithFilter() throws Exception {
     final BrokerRequest brokerRequest = getAggregationGroupByWithFilterBrokerRequest();
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final PlanNode rootPlanNode = instancePlanMaker.makeInnerSegmentPlan(_indexSegment, brokerRequest);
     rootPlanNode.showTree("");
     // UAggregationGroupByOperator operator = (UAggregationGroupByOperator) rootPlanNode.run();
@@ -381,9 +388,9 @@ public class AggregationGroupByOperatorForMultiValueTest {
   public void testInterSegmentAggregationGroupByPlanMakerAndRun() throws Exception {
     final int numSegments = 5;
     setupSegmentList(numSegments);
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final BrokerRequest brokerRequest = getAggregationGroupByNoFilterBrokerRequest();
-    final BrokerResponse brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
+    final BrokerResponseJSON brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
     assertBrokerResponse(numSegments, brokerResponse);
   }
 
@@ -391,13 +398,13 @@ public class AggregationGroupByOperatorForMultiValueTest {
   public void testEmptyQueryResultsForInterSegmentAggregationGroupBy() throws Exception {
     final int numSegments = 20;
     setupSegmentList(numSegments);
-    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV0();
+    final PlanMaker instancePlanMaker = new InstancePlanMakerImplV2();
     final BrokerRequest brokerRequest = getAggregationGroupByWithEmptyFilterBrokerRequest();
-    final BrokerResponse brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
+    final BrokerResponseJSON brokerResponse = getBrokerResponse(instancePlanMaker, brokerRequest);
     assertEmptyBrokerResponse(brokerResponse);
   }
 
-  private BrokerResponse getBrokerResponse(PlanMaker instancePlanMaker, BrokerRequest brokerRequest) {
+  private BrokerResponseJSON getBrokerResponse(PlanMaker instancePlanMaker, BrokerRequest brokerRequest) {
     final ExecutorService executorService = Executors.newCachedThreadPool(new NamedThreadFactory("test-plan-maker"));
     final Plan globalPlan =
         instancePlanMaker.makeInterSegmentPlan(_indexSegmentList, brokerRequest, executorService, 150000);
@@ -409,13 +416,13 @@ public class AggregationGroupByOperatorForMultiValueTest {
     final DefaultReduceService defaultReduceService = new DefaultReduceService();
     final Map<ServerInstance, DataTable> instanceResponseMap = new HashMap<ServerInstance, DataTable>();
     instanceResponseMap.put(new ServerInstance("localhost:0000"), instanceResponse);
-    final BrokerResponse brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
+    final BrokerResponseJSON brokerResponse = defaultReduceService.reduceOnDataTable(brokerRequest, instanceResponseMap);
     LOGGER.debug("brokerResponse: {}", new JSONArray(brokerResponse.getAggregationResults()));
     LOGGER.info("Time used : {}", brokerResponse.getTimeUsedMs());
     return brokerResponse;
   }
 
-  private void assertBrokerResponse(int numSegments, BrokerResponse brokerResponse) throws JSONException {
+  private void assertBrokerResponse(int numSegments, BrokerResponseJSON brokerResponse) throws JSONException {
     Assert.assertEquals(100000 * numSegments, brokerResponse.getNumDocsScanned());
     Assert.assertEquals(_numAggregations, brokerResponse.getAggregationResults().size());
     for (int i = 0; i < _numAggregations; ++i) {
@@ -454,7 +461,7 @@ public class AggregationGroupByOperatorForMultiValueTest {
 
   }
 
-  private void assertEmptyBrokerResponse(BrokerResponse brokerResponse) throws JSONException {
+  private void assertEmptyBrokerResponse(BrokerResponseJSON brokerResponse) throws JSONException {
     Assert.assertEquals(0, brokerResponse.getNumDocsScanned());
     Assert.assertEquals(_numAggregations, brokerResponse.getAggregationResults().size());
     for (int i = 0; i < _numAggregations; ++i) {
@@ -467,7 +474,7 @@ public class AggregationGroupByOperatorForMultiValueTest {
     assertionOnCount(brokerResponse);
   }
 
-  private void assertionOnCount(BrokerResponse brokerResponse)
+  private void assertionOnCount(BrokerResponseJSON brokerResponse)
       throws JSONException {
     Assert.assertEquals("count_star", brokerResponse.getAggregationResults().get(0).getString("function").toString());
     Assert.assertEquals("sum_count", brokerResponse.getAggregationResults().get(1).getString("function").toString());

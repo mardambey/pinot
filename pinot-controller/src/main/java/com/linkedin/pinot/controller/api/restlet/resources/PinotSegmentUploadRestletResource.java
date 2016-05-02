@@ -19,15 +19,17 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.linkedin.pinot.common.config.TableNameBuilder;
 import com.linkedin.pinot.common.metadata.ZKMetadataProvider;
 import com.linkedin.pinot.common.metadata.segment.OfflineSegmentZKMetadata;
+import com.linkedin.pinot.common.metrics.ControllerMeter;
 import com.linkedin.pinot.common.segment.SegmentMetadata;
 import com.linkedin.pinot.common.utils.StringUtil;
 import com.linkedin.pinot.common.utils.TarGzCompressionUtils;
 import com.linkedin.pinot.common.utils.time.TimeUtils;
-import com.linkedin.pinot.controller.api.swagger.HttpVerb;
-import com.linkedin.pinot.controller.api.swagger.Parameter;
-import com.linkedin.pinot.controller.api.swagger.Paths;
-import com.linkedin.pinot.controller.api.swagger.Summary;
-import com.linkedin.pinot.controller.api.swagger.Tags;
+import com.linkedin.pinot.controller.api.ControllerRestApplication;
+import com.linkedin.pinot.common.restlet.swagger.HttpVerb;
+import com.linkedin.pinot.common.restlet.swagger.Parameter;
+import com.linkedin.pinot.common.restlet.swagger.Paths;
+import com.linkedin.pinot.common.restlet.swagger.Summary;
+import com.linkedin.pinot.common.restlet.swagger.Tags;
 import com.linkedin.pinot.controller.helix.core.PinotResourceManagerResponse;
 import com.linkedin.pinot.core.segment.index.SegmentMetadataImpl;
 import java.io.File;
@@ -63,7 +65,7 @@ import org.slf4j.LoggerFactory;
  * sample curl call : curl -F campaignInsights_adsAnalysis-bmCamp_11=@campaignInsights_adsAnalysis-bmCamp_11      http://localhost:8998/segments
  *
  */
-public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase {
+public class PinotSegmentUploadRestletResource extends BasePinotControllerRestletResource {
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotSegmentUploadRestletResource.class);
   private final File baseDataDir;
   private final File tempDir;
@@ -108,6 +110,7 @@ public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase 
     } catch (final Exception e) {
       presentation = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception while processing get request", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_GET_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     }
     return presentation;
@@ -264,11 +267,13 @@ public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase 
         // Some problem occurs, sent back a simple line of text.
         rep = new StringRepresentation("no file uploaded", MediaType.TEXT_PLAIN);
         LOGGER.warn("No file was uploaded");
+        ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_UPLOAD_ERROR, 1L);
         setStatus(Status.SERVER_ERROR_INTERNAL);
       }
     } catch (final Exception e) {
       rep = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception in file upload", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_UPLOAD_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     } finally {
       if ((tmpSegmentDir != null) && tmpSegmentDir.exists()) {
@@ -276,6 +281,7 @@ public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase 
           FileUtils.deleteDirectory(tmpSegmentDir);
         } catch (final IOException e) {
           LOGGER.error("Caught exception in file upload", e);
+          ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_UPLOAD_ERROR, 1L);
           setStatus(Status.SERVER_ERROR_INTERNAL);
         }
       }
@@ -311,7 +317,13 @@ public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase 
           .addSegment(metadata, constructDownloadUrl(metadata.getTableName(), dataFile.getName()));
     }
 
-    setStatus((response.isSuccessfull() ? Status.SUCCESS_OK : Status.SERVER_ERROR_INTERNAL));
+    if (response.isSuccessfull()) {
+      setStatus(Status.SUCCESS_OK);
+    } else {
+        ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_UPLOAD_ERROR, 1L);
+        setStatus(Status.SERVER_ERROR_INTERNAL);
+      }
+
     return new StringRepresentation(response.toJSON().toString());
   }
 
@@ -379,36 +391,40 @@ public class PinotSegmentUploadRestletResource extends PinotRestletResourceBase 
       final String segmentName = (String) getRequest().getAttributes().get("segmentName");
 
       LOGGER.info("Getting segment deletion request, tableName: " + tableName + " segmentName: " + segmentName);
-      rep = deleteSegment(tableName, segmentName);
+      rep = deleteOneSegment(tableName, segmentName);
     } catch (final Exception e) {
       rep = exceptionToStringRepresentation(e);
       LOGGER.error("Caught exception while processing delete request", e);
+      ControllerRestApplication.getControllerMetrics().addMeteredGlobalValue(ControllerMeter.CONTROLLER_SEGMENT_DELETE_ERROR, 1L);
       setStatus(Status.SERVER_ERROR_INTERNAL);
     }
     return rep;
   }
 
   @HttpVerb("delete")
-  @Summary("Deletes a segment from a table")
+  @Summary("Delete a segment from a table")
   @Tags({"segment", "table"})
-  @Paths({
-      "/segments/{tableName}/{segmentName}/",
-      "/segments/{tableName}/{segmentName}",
-      "/segments/{tableName}/",
-      "/segments/{tableName}"
-  })
-  private Representation deleteSegment(
-      @Parameter(name = "tableName", in = "path", description = "The name of the table in which the segment resides", required = true)
-      String tableName,
-      @Parameter(name = "segmentName", in = "path", description = "The name of the segment to delete", required = false)
-      String segmentName)
+  @Paths({ "/segments/{tableName}/{segmentName}", "/segments/{tableName}/{segmentName}/" })
+  private Representation deleteOneSegment(
+      @Parameter(name = "tableName", in = "path", description = "The name of the table in which the segment resides",
+          required = true) String tableName,
+      @Parameter(name = "segmentName", in = "path", description = "The name of the segment to delete",
+          required = true) String segmentName)
       throws JsonProcessingException, JSONException {
-    if (tableName == null) {
-      throw new RuntimeException("either table name or segment name is null");
-    }
 
-    PinotSegmentRestletResource segmentRestletResource = new PinotSegmentRestletResource();
-    return segmentRestletResource.toggleSegmentState(tableName, segmentName, "drop", null);
+    return new PinotSegmentRestletResource().toggleSegmentState(tableName, segmentName, "drop", null);
+  }
+
+  @HttpVerb("delete")
+  @Summary("Delete *ALL* segments from a table")
+  @Tags({"segment", "table"})
+  @Paths({ "/segments/{tableName}", "/segments/{tableName}/" })
+  private Representation deleteAllSegments(
+      @Parameter(name = "tableName", in = "path", description = "The name of the table in which the segment resides",
+          required = true) String tableName)
+      throws JsonProcessingException, JSONException {
+
+    return new PinotSegmentRestletResource().toggleSegmentState(tableName, null, "drop", null);
   }
 
   public String constructDownloadUrl(String tableName, String segmentName) {
